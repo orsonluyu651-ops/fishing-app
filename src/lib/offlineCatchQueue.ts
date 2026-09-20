@@ -40,6 +40,16 @@ const PHOTO_DIR_NAME = 'pending-catch-photos';
 const CLIENT_QUEUE_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Failed attempts before an entry stops reading as merely "waiting" and starts
+// reading as "needs attention". Kept here so the UI and any future retry cap
+// share one definition of failure.
+export const FAILED_ATTEMPT_THRESHOLD = 5;
+
+/** True once an entry has failed often enough to be worth flagging to the user. */
+export function isFailedEntry(entry: QueuedCatch): boolean {
+  return entry.attempts >= FAILED_ATTEMPT_THRESHOLD;
+}
+
 // Generates the idempotency key for one catch. Exported so a caller that writes
 // a catch directly can mint the id up front and hand the SAME value to the queue
 // if that write fails - otherwise a committed-but-unacknowledged insert would be

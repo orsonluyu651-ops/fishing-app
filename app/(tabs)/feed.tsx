@@ -8,11 +8,14 @@ import * as ImagePicker from 'expo-image-picker';
 import { File } from 'expo-file-system';
 import {
   enqueueCatch,
+  FAILED_ATTEMPT_THRESHOLD,
+  isFailedEntry,
   isNetworkError,
   loadQueue,
   newQueueId,
   pendingForUser,
   syncQueue,
+  type QueuedCatch,
 } from '../../src/lib/offlineCatchQueue';
 import { askAssistant, type AssistantAnswer } from '../../src/lib/assistant';
 
@@ -43,7 +46,9 @@ export default function FeedScreen() {
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [loadingPhoto, setLoadingPhoto] = useState(false);
   const [submittingCatch, setSubmittingCatch] = useState(false);
-  const [pendingCount, setPendingCount] = useState(0);
+  // The signed-in user's queued catches, not just a count: the feed renders a
+  // placeholder card per pending item and the banner classifies them.
+  const [pendingEntries, setPendingEntries] = useState<QueuedCatch[]>([]);
   const [syncingQueue, setSyncingQueue] = useState(false);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [newComment, setNewComment] = useState('');
@@ -91,11 +96,11 @@ export default function FeedScreen() {
     return currentUserIdRef.current;
   };
 
-  const refreshPendingCount = async (userId: string | null = currentUserIdRef.current) => {
-    // Scope the badge to this user: catches queued by another account stay
+  const refreshPendingQueue = async (userId: string | null = currentUserIdRef.current) => {
+    // Scope the queue view to this user: catches queued by another account stay
     // parked until their owner signs in, so they are not "waiting to sync" here.
     const queue = await loadQueue();
-    setPendingCount(pendingForUser(queue, userId).length);
+    setPendingEntries(pendingForUser(queue, userId));
   };
 
   const runQueueSync = async (
@@ -107,14 +112,14 @@ export default function FeedScreen() {
     if (!userId) return;
     const queue = await loadQueue();
     if (pendingForUser(queue, userId).length === 0) {
-      setPendingCount(0);
+      setPendingEntries([]);
       return;
     }
     setSyncingQueue(true);
     try {
       const { synced, failed } = await syncQueue(userId);
       const remaining = await loadQueue();
-      setPendingCount(pendingForUser(remaining, userId).length);
+      setPendingEntries(pendingForUser(remaining, userId));
       if (!silent && synced > 0) {
         Alert.alert(
           'Offline catches synced',
@@ -137,7 +142,7 @@ export default function FeedScreen() {
     const bootstrap = async () => {
       const userId = await initializeFeed();
       if (cancelled) return;
-      await refreshPendingCount(userId);
+      await refreshPendingQueue(userId);
       // Flush anything left over from a previous session now that we know who
       // is signed in, instead of waiting for the next connectivity change.
       await runQueueSync(true, userId);
@@ -158,7 +163,7 @@ export default function FeedScreen() {
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
       if (nextState !== 'active') return;
       const userId = currentUserIdRef.current;
-      refreshPendingCount(userId);
+      refreshPendingQueue(userId);
       runQueueSync(true, userId);
     });
 
@@ -305,7 +310,7 @@ export default function FeedScreen() {
       });
       resetCatchForm();
       await initializeFeed();
-      await refreshPendingCount();
+      await refreshPendingQueue();
     } catch (error: any) {
       console.error('Error submitting catch:', error);
       if (isNetworkError(error)) {
@@ -324,7 +329,7 @@ export default function FeedScreen() {
             },
             clientQueueId,
           );
-          await refreshPendingCount();
+          await refreshPendingQueue();
           Alert.alert(
             'Saved offline',
             'No connection — your catch is queued and will sync automatically when you are back online.',
@@ -390,6 +395,17 @@ export default function FeedScreen() {
     }
   };
 
+  // Two buckets the banner reports separately: still being retried, versus failed
+  // often enough to need the user's attention.
+  const waitingCount = pendingEntries.filter((entry) => !isFailedEntry(entry)).length;
+  const failedCount = pendingEntries.filter(isFailedEntry).length;
+  const pendingSummary = [
+    waitingCount > 0 ? `${waitingCount} waiting to sync` : null,
+    failedCount > 0 ? `${failedCount} failed after ${FAILED_ATTEMPT_THRESHOLD} attempts` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   if (loading) {
     return (
       <View style={styles.centered}>
@@ -400,23 +416,75 @@ export default function FeedScreen() {
 
   return (
     <View style={styles.container}>
-      {pendingCount > 0 && (
+      {pendingEntries.length > 0 && (
         <TouchableOpacity
-          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#FFF8E1', borderColor: '#FFB300', borderWidth: 1, marginHorizontal: 12, marginBottom: 8, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 }}
+          style={[styles.syncBanner, failedCount > 0 && styles.syncBannerAlert]}
           onPress={() => runQueueSync(false)}
           disabled={syncingQueue}
+          accessibilityRole="summary"
+          accessibilityState={{ busy: syncingQueue }}
+          accessibilityHint="Retries uploading your saved offline catches"
+          accessibilityLabel={
+            syncingQueue
+              ? `Syncing offline catches. ${pendingSummary}.`
+              : `Offline catch queue. ${pendingSummary}. Activate to retry syncing.`
+          }
         >
-          <Ionicons name="cloud-offline-outline" size={18} color="#E65100" />
-          <Text style={{ color: '#E65100', fontSize: 13, fontWeight: '700' }}>
-            {syncingQueue
-              ? 'Syncing offline catches...'
-              : `${pendingCount} catch${pendingCount === 1 ? '' : 'es'} waiting to sync — tap to retry`}
+          <Ionicons
+            name={failedCount > 0 ? 'alert-circle-outline' : 'cloud-offline-outline'}
+            size={18}
+            color={failedCount > 0 ? '#B91C1C' : '#E65100'}
+          />
+          <Text style={[styles.syncBannerText, failedCount > 0 && styles.syncBannerTextAlert]}>
+            {syncingQueue ? 'Syncing offline catches...' : `${pendingSummary} — tap to retry`}
           </Text>
         </TouchableOpacity>
       )}
       <FlatList
         data={catches}
         keyExtractor={(item) => item.id}
+        ListHeaderComponent={
+          pendingEntries.length > 0 ? (
+            <View style={styles.pendingList}>
+              {pendingEntries.map((entry) => {
+                const failedEntry = isFailedEntry(entry);
+                return (
+                  <View
+                    key={entry.id}
+                    style={[styles.card, styles.pendingCard]}
+                    pointerEvents="none"
+                    accessible
+                    accessibilityRole="summary"
+                    accessibilityLabel={
+                      `Queued catch, ${entry.species}` +
+                      (entry.length !== null ? `, ${entry.length} centimetres` : '') +
+                      (entry.photoUri ? ', with photo' : '') +
+                      (failedEntry
+                        ? `. Needs attention after ${entry.attempts} failed sync attempts.`
+                        : '. Saved on this device, waiting to sync.')
+                    }
+                  >
+                    <View style={styles.pendingBadgeRow}>
+                      <Ionicons
+                        name={failedEntry ? 'alert-circle-outline' : 'cloud-upload-outline'}
+                        size={13}
+                        color={failedEntry ? '#B91C1C' : '#B45309'}
+                      />
+                      <Text style={[styles.pendingBadge, failedEntry && styles.pendingBadgeAlert]}>
+                        {failedEntry ? 'Needs attention' : 'Queued offline'}
+                      </Text>
+                    </View>
+                    <Text style={styles.title}>
+                      🐟 {entry.species}
+                      {entry.length !== null ? ` — ${entry.length} cm` : ''}
+                    </Text>
+                    <Text style={styles.details}>Saved on this device — not yet on the feed</Text>
+                  </View>
+                );
+              })}
+            </View>
+          ) : null
+        }
         renderItem={({ item }) => (
           <View style={styles.card}>
             <Text style={styles.username}>@{item.profiles.username}</Text>
@@ -650,6 +718,15 @@ const styles = StyleSheet.create({
   cancelText: { color: '#64748b', fontWeight: '600' },
   submitBtn: { backgroundColor: '#0284c7', padding: 12, flex: 1, alignItems: 'center', borderRadius: 8 },
   submitText: { color: '#fff', fontWeight: '600' },
+  syncBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#FFF8E1', borderColor: '#FFB300', borderWidth: 1, marginHorizontal: 12, marginBottom: 8, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 },
+  syncBannerAlert: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' },
+  syncBannerText: { color: '#E65100', fontSize: 13, fontWeight: '700' },
+  syncBannerTextAlert: { color: '#B91C1C' },
+  pendingList: { marginBottom: 4 },
+  pendingCard: { opacity: 0.6, borderStyle: 'dashed', backgroundColor: '#f1f5f9' },
+  pendingBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 6 },
+  pendingBadge: { fontSize: 11, fontWeight: '700', color: '#B45309', letterSpacing: 0.5 },
+  pendingBadgeAlert: { color: '#B91C1C' },
   fab: { position: 'absolute', bottom: 20, right: 20, backgroundColor: '#007AFF', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', elevation: 5 },
   fabText: { color: '#fff', fontSize: 28, fontWeight: 'bold' }
 });
