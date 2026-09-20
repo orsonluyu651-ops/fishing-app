@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Tidewire",
+    "slug": "tidewire",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourname.fishingapp"
+    },
+    "android": {
+      "package": "com.yourname.fishingapp"
+    },
+    "scheme": "tidewire",
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-image-picker"
+    ]
+  }
+}
