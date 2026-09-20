@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, Modal } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, Modal, Image, Alert } from 'react-native';
 import { supabase } from '../../src/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
+import * as ImagePicker from 'expo-image-picker';
+import { File } from 'expo-file-system';
 
 interface CatchItem {
   id: string;
@@ -25,6 +27,9 @@ export default function FeedScreen() {
   const [length, setLength] = useState('');
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [loadingLocation, setLoadingLocation] = useState(false);
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [loadingPhoto, setLoadingPhoto] = useState(false);
+  const [submittingCatch, setSubmittingCatch] = useState(false);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [newComment, setNewComment] = useState('');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -81,6 +86,108 @@ export default function FeedScreen() {
       await supabase.from('post_likes').delete().eq('post_id', postId).eq('user_id', currentUserId);
     } else {
       await supabase.from('post_likes').insert({ post_id: postId, user_id: currentUserId });
+    }
+  };
+
+  const pickPhoto = async () => {
+    try {
+      setLoadingPhoto(true);
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow photo library access to attach a catch photo.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets[0]) {
+        setPhotoUri(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error picking photo:', error);
+      Alert.alert('Could not pick photo', 'Please try again.');
+    } finally {
+      setLoadingPhoto(false);
+    }
+  };
+
+  const resetCatchForm = () => {
+    setSpecies('');
+    setLength('');
+    setLocation(null);
+    setPhotoUri(null);
+    setModalVisible(false);
+  };
+
+  const submitCatch = async () => {
+    const trimmedSpecies = species.trim();
+    if (!trimmedSpecies) {
+      Alert.alert('Species required', 'Enter the species before submitting your catch.');
+      return;
+    }
+    if (!currentUserId) {
+      Alert.alert('Sign in required', 'Sign in before logging a catch.');
+      return;
+    }
+    const parsedLength = length.trim() === '' ? null : Number(length.trim());
+    if (parsedLength !== null && (!Number.isFinite(parsedLength) || parsedLength <= 0)) {
+      Alert.alert('Invalid length', 'Length must be a positive number in centimetres.');
+      return;
+    }
+
+    try {
+      setSubmittingCatch(true);
+
+      // 1) Package the photo: upload to the private catch-media bucket under the user's folder.
+      let mediaPath: string | null = null;
+      if (photoUri) {
+        const extension = photoUri.split('.').pop()?.split('?')[0]?.toLowerCase() || 'jpg';
+        const filePath = `${currentUserId}/${Date.now()}.${extension}`;
+        const file = new File(photoUri);
+        const bytes = await file.bytes();
+        const contentType =
+          extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg';
+        const { error: uploadError } = await supabase.storage
+          .from('catch-media')
+          .upload(filePath, bytes, { contentType, upsert: false });
+        if (uploadError) throw uploadError;
+        mediaPath = filePath;
+      }
+
+      // 2) Package catch details + GPS coords together (location lives in environmental per schema).
+      const { data: inserted, error: insertError } = await supabase
+        .from('catches')
+        .insert({
+          user_id: currentUserId,
+          species: trimmedSpecies,
+          length: parsedLength,
+          media_path: mediaPath,
+          environmental: location
+            ? { latitude: location.latitude, longitude: location.longitude }
+            : {},
+        })
+        .select('id')
+        .single();
+      if (insertError) throw insertError;
+
+      // 3) Refresh the feed (the create_feed_post_on_catch trigger auto-creates the post).
+      console.log('Catch Logged:', {
+        catchId: inserted?.id,
+        species: trimmedSpecies,
+        length: parsedLength,
+        location,
+        mediaPath,
+      });
+      resetCatchForm();
+      await initializeFeed();
+    } catch (error: any) {
+      console.error('Error submitting catch:', error);
+      Alert.alert('Could not log catch', error?.message ?? 'Please try again.');
+    } finally {
+      setSubmittingCatch(false);
     }
   };
 
@@ -191,8 +298,14 @@ export default function FeedScreen() {
 
         {/* UI Placeholders for Advanced Data */}
         <View style={{ flexDirection: 'row', gap: 12 }}>
-          <TouchableOpacity style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#F2F2F7', padding: 14, borderRadius: 12, borderStyle: 'dashed', borderWidth: 1, borderColor: '#C7C7CC' }} onPress={() => console.log('Photo selector placeholder tapped')}>
-            <Text style={{ fontSize: 15, fontWeight: '600', color: '#007AFF' }}>📸 Add Photo</Text>
+          <TouchableOpacity
+            style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: photoUri ? '#E3F2FD' : '#F2F2F7', padding: 14, borderRadius: 12, borderStyle: photoUri ? 'solid' : 'dashed', borderWidth: 1, borderColor: photoUri ? '#007AFF' : '#C7C7CC' }}
+            onPress={pickPhoto}
+            disabled={loadingPhoto}
+          >
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#007AFF' }}>
+              {loadingPhoto ? '⏳ Loading...' : photoUri ? '🖼️ Photo Added' : '📸 Add Photo'}
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity 
      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: location ? '#E8F5E9' : '#F2F2F7', padding: 14, borderRadius: 12, borderStyle: location ? 'solid' : 'dashed', borderWidth: 1, borderColor: location ? '#34C759' : '#C7C7CC' }} 
@@ -206,7 +319,7 @@ export default function FeedScreen() {
            return;
          }
          let currentLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-         setLocation({ latitude: currentLoc.coords.latitude, longitude: currentLoc.coords.longitude });
+         setLocation({ latitude: Number(currentLoc.coords.latitude), longitude: Number(currentLoc.coords.longitude) });
        } catch (error) {
          console.error('Error fetching location:', error);
          alert('Could not fetch location. Please try again.');
@@ -225,15 +338,32 @@ export default function FeedScreen() {
             📍 {location.latitude.toFixed(4)}, {location.longitude.toFixed(4)}
           </Text>
         )}
+        {photoUri && (
+          <View style={{ marginTop: 8, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: '#C7C7CC', position: 'relative' }}>
+            <Image source={{ uri: photoUri }} style={{ width: '100%', height: 160 }} resizeMode="cover" />
+            <TouchableOpacity
+              onPress={() => setPhotoUri(null)}
+              style={{ position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 16, width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       {/* Action Buttons */}
       <View style={{ gap: 10 }}>
-        <TouchableOpacity style={{ backgroundColor: '#007AFF', padding: 16, borderRadius: 14, alignItems: 'center', shadowColor: '#007AFF', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 3 }} onPress={() => { console.log('Catch Logged:', { species, length, location }); setSpecies(''); setLength(''); setLocation(null); setModalVisible(false); }}>
-          <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '600' }}>Submit Catch</Text>
+        <TouchableOpacity
+          style={{ backgroundColor: submittingCatch ? '#8E8E93' : '#007AFF', padding: 16, borderRadius: 14, alignItems: 'center', shadowColor: '#007AFF', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 3 }}
+          onPress={submitCatch}
+          disabled={submittingCatch}
+        >
+          <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '600' }}>
+            {submittingCatch ? 'Logging Catch...' : 'Submit Catch'}
+          </Text>
         </TouchableOpacity>
         
-        <TouchableOpacity style={{ padding: 16, borderRadius: 14, alignItems: 'center' }} onPress={() => setModalVisible(false)}>
+        <TouchableOpacity style={{ padding: 16, borderRadius: 14, alignItems: 'center' }} onPress={resetCatchForm}>
           <Text style={{ color: '#8E8E93', fontSize: 16, fontWeight: '500' }}>Cancel</Text>
         </TouchableOpacity>
       </View>

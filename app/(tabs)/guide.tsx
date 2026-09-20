@@ -13,8 +13,6 @@ export default function GuideScreen() {
 
       {/* 🗺️ Interactive GPS Map Integration Canvas */}
       <Text style={styles.sectionTitle}>Interactive GPS Fishing Hotspots</Text>
-<RegionPreviewMap />
-<RegionPreviewMap />
       <RegionPreviewMap />
       {/* 📝 Local Fishing QLD Regulations */}
       <Text style={styles.sectionTitle}>Local Regulations & Slot Limits</Text>

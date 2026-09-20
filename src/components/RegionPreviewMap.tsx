@@ -2,19 +2,28 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-const HOTSPOTS = [
+interface Hotspot {
+  id: string;
+  name: string;
+  lat: string;
+  lng: string;
+  fish: string;
+}
+
+const HOTSPOTS: Hotspot[] = [
   { id: '1', name: 'Southport Seaway', lat: '-27.9372', lng: '153.4312', fish: 'Jewfish & Flathead' },
   { id: '2', name: 'Broadwater Banks', lat: '-27.9158', lng: '153.4091', fish: 'Whiting & Bream' },
   { id: '3', name: 'Jumpinpin Channel', lat: '-27.7214', lng: '153.4445', fish: 'Big Flathead' },
 ];
 
 export default function RegionPreviewMap() {
-  const [activeSpot, setActiveSpot] = useState(HOTSPOTS[0]);
+  const [activeSpot, setActiveSpot] = useState<Hotspot>(HOTSPOTS[0]);
 
   return (
     <View style={styles.card}>
       <View style={styles.mapCanvas}>
         <Ionicons name="compass" size={40} color="#0284c7" />
+        <Text style={styles.activeName}>📍 {activeSpot.name}</Text>
         <Text style={styles.coordinates}>Lat: {activeSpot.lat} | Lng: {activeSpot.lng}</Text>
         <Text style={styles.targetFish}>🎯 Target: {activeSpot.fish}</Text>
       </View>
@@ -37,6 +46,7 @@ export default function RegionPreviewMap() {
 const styles = StyleSheet.create({
   card: { backgroundColor: '#fff', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', marginTop: 12 },
   mapCanvas: { height: 150, backgroundColor: '#e0f2fe', borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginBottom: 12, borderWidth: 1, borderColor: '#bae6fd' },
+  activeName: { fontSize: 15, fontWeight: '700', color: '#0284c7', marginTop: 8 },
   coordinates: { fontSize: 14, fontWeight: 'bold', color: '#0f172a', marginTop: 8 },
   targetFish: { fontSize: 12, color: '#64748b', marginTop: 2 },
   label: { fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 8 },
