@@ -50,6 +50,46 @@ export function isFailedEntry(entry: QueuedCatch): boolean {
   return entry.attempts >= FAILED_ATTEMPT_THRESHOLD;
 }
 
+/** Pulls an HTTP-ish status off a Supabase or storage error, when it carries one. */
+function getErrorStatus(error: any): number | null {
+  const raw = error?.status ?? error?.statusCode;
+  const status = typeof raw === 'string' ? Number(raw) : raw;
+  return typeof status === 'number' && Number.isFinite(status) ? status : null;
+}
+
+/**
+ * True when retrying the same payload cannot possibly succeed.
+ *
+ * Postgres data exceptions (/^22/), integrity constraint violations (/^23/) and
+ * SQLSTATE /^42/ - which covers 42501 insufficient_privilege, i.e. an RLS
+ * refusal, and 42703 undefined_column, e.g. a catch carrying client_queue_id
+ * before migration 0015 is applied - are all deterministic. So are 4xx HTTP
+ * responses. Those entries are failed immediately so they stop hitting the
+ * backend on every reconnect.
+ *
+ * Transient conditions stay retryable: network drops, 408 timeouts, 429 rate
+ * limits and any 5xx, plus 3xx.
+ *
+ * Anything unrecognised is deliberately treated as retryable - a catch the
+ * angler actually landed should never be written off because we failed to
+ * recognise an error shape.
+ */
+export function isPermanentFailure(error: any): boolean {
+  if (isNetworkError(error)) return false;
+
+  const status = getErrorStatus(error);
+  if (status !== null) {
+    if (status === 408 || status === 429) return false;
+    if (status >= 500) return false;
+    if (status >= 400) return true;
+  }
+
+  const code = error?.code;
+  if (typeof code === 'string' && /^(22|23|42)/.test(code)) return true;
+
+  return false;
+}
+
 // Generates the idempotency key for one catch. Exported so a caller that writes
 // a catch directly can mint the id up front and hand the SAME value to the queue
 // if that write fails - otherwise a committed-but-unacknowledged insert would be
@@ -122,15 +162,84 @@ function withQueueLock<T>(task: () => Promise<T>): Promise<T> {
   return result;
 }
 
+/** Structural check for a queue entry, used to drop only the broken rows. */
+function isQueuedCatch(value: unknown): value is QueuedCatch {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<QueuedCatch>;
+  return (
+    typeof candidate.id === 'string' &&
+    candidate.id.length > 0 &&
+    typeof candidate.userId === 'string' &&
+    candidate.userId.length > 0 &&
+    typeof candidate.species === 'string'
+  );
+}
+
+/**
+ * Best-effort recovery of a payload that will not parse as a whole.
+ *
+ * Queue entries are flat objects serialised back to back, so the only separators
+ * between them are `},{`. Splitting on that lets each entry be parsed on its
+ * own, which means one corrupt row costs only itself instead of the angler's
+ * entire pending cache. Deliberately best-effort: a value that itself contains
+ * the literal `},{` may still be lost, but that is a far better outcome than
+ * discarding everything.
+ */
+function salvageQueueEntries(raw: string): QueuedCatch[] {
+  const recovered: QueuedCatch[] = [];
+  for (const fragment of raw.split(/\}\s*,\s*\{/)) {
+    // Re-add the braces the split consumed, tolerating the array brackets that
+    // bracket the first and last fragment.
+    const body = fragment
+      .trim()
+      .replace(/^\[?\s*\{?/, '')
+      .replace(/\}?\s*\]?$/, '');
+    if (!body) continue;
+    try {
+      const parsed = JSON.parse(`{${body}}`);
+      if (isQueuedCatch(parsed)) recovered.push(parsed);
+    } catch {
+      // This fragment is the un-parseable row. Drop it and keep the rest.
+    }
+  }
+  return recovered;
+}
+
+/**
+ * Reads the queue, salvaging what it can rather than flushing the cache.
+ *
+ * Previously any parse failure returned [] and silently destroyed every pending
+ * catch. Now a malformed payload is logged, then recovered row by row, and rows
+ * that are individually broken are the only thing dropped.
+ */
 function parseQueue(raw: string | null): QueuedCatch[] {
   if (!raw) return [];
+
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as QueuedCatch[]) : [];
+    parsed = JSON.parse(raw);
   } catch (error) {
-    console.error('Error parsing offline catch queue:', error);
-    return [];
+    console.error('Offline catch queue payload is not valid JSON; salvaging entries:', error);
+    const salvaged = salvageQueueEntries(raw);
+    console.warn(
+      `[offlineCatchQueue] Recovered ${salvaged.length} entr(ies) from a corrupt payload.`,
+    );
+    return salvaged;
   }
+
+  if (!Array.isArray(parsed)) {
+    console.error('Offline catch queue payload is not an array; salvaging entries.');
+    return salvageQueueEntries(raw);
+  }
+
+  // Whole payload parsed: drop only the rows that are structurally broken.
+  const valid = parsed.filter(isQueuedCatch);
+  if (valid.length !== parsed.length) {
+    console.warn(
+      `[offlineCatchQueue] Dropped ${parsed.length - valid.length} malformed queue entr(ies).`,
+    );
+  }
+  return valid;
 }
 
 // Unlocked read/write primitives. Only the public entry points above acquire
@@ -184,6 +293,30 @@ function deleteQueuedPhoto(photoUri: string | null): void {
   }
 }
 
+/**
+ * Erases every cached photo copy belonging to a queue entry.
+ *
+ * Two passes on purpose. The recorded `photoUri` is deleted first - which
+ * matters because persistQueuedPhoto falls back to the picker's own URI if the
+ * copy failed, so the file is not always inside the pending directory. Then
+ * pending-catch-photos/ is swept for any copy still named after the entry, so a
+ * discard can never leak storage even if the recorded URI was lost or rewritten.
+ */
+function deleteQueuedPhotoFiles(queueId: string, photoUri: string | null): void {
+  deleteQueuedPhoto(photoUri);
+  try {
+    const dir = new Directory(Paths.document, PHOTO_DIR_NAME);
+    if (!dir.exists) return;
+    for (const item of dir.list()) {
+      if (Paths.basename(item.uri).startsWith(`${queueId}.`) && item.exists) {
+        item.delete();
+      }
+    }
+  } catch (error) {
+    console.error('Error sweeping cached photos for a discarded catch:', error);
+  }
+}
+
 
 /**
  * Adds a catch to the queue, oldest-last.
@@ -216,6 +349,24 @@ export function enqueueCatch(
   });
 }
 
+/**
+ * Removes one queued catch and erases its cached photo.
+ *
+ * Returns false when the id was not queued. Takes the lock so a discard cannot
+ * interleave with an in-flight sync, which would otherwise finish uploading an
+ * entry the user just removed.
+ */
+export function discardQueuedCatch(id: string): Promise<boolean> {
+  return withQueueLock(async () => {
+    const queue = await readQueue();
+    const entry = queue.find((item) => item.id === id);
+    if (!entry) return false;
+    await writeQueue(queue.filter((item) => item.id !== id));
+    deleteQueuedPhotoFiles(id, entry.photoUri);
+    return true;
+  });
+}
+
 // ── Unlocked queue mutations ────────────────────────────────────────
 // Callers must already hold the lock (syncQueue and enqueueCatch do). They go
 // through readQueue/writeQueue rather than the public API so they cannot
@@ -229,6 +380,22 @@ async function removeFromQueue(id: string): Promise<void> {
 async function bumpAttempts(id: string): Promise<void> {
   const queue = await readQueue();
   await writeQueue(queue.map((item) => (item.id === id ? { ...item, attempts: item.attempts + 1 } : item)));
+}
+
+/**
+ * Jumps an entry straight to the failure threshold.
+ *
+ * Used when the backend has already given a definitive answer: there is no point
+ * spending four more round trips rediscovering the same rejection, and the entry
+ * needs to stop looking merely "waiting" the moment we know it is stuck.
+ */
+async function markEntryFailed(id: string): Promise<void> {
+  const queue = await readQueue();
+  await writeQueue(
+    queue.map((item) =>
+      item.id === id ? { ...item, attempts: Math.max(item.attempts, FAILED_ATTEMPT_THRESHOLD) } : item,
+    ),
+  );
 }
 
 /**
@@ -345,6 +512,16 @@ export function pendingForUser(queue: QueuedCatch[], userId: string | null): Que
   return queue.filter((entry) => entry.userId === userId);
 }
 
+export interface SyncQueueOptions {
+  /**
+   * When false (the default, i.e. automatic background sync) an entry that has
+   * already reached FAILED_ATTEMPT_THRESHOLD is skipped, so a deterministic
+   * failure stops hammering the backend on every reconnect. A user-initiated
+   * retry passes true to give those entries another chance.
+   */
+  includeFailed?: boolean;
+}
+
 /**
  * Flushes the queue for the signed-in user, oldest first.
  *
@@ -357,7 +534,11 @@ export function pendingForUser(queue: QueuedCatch[], userId: string | null): Que
  * Runs inside the queue lock, so a NetInfo reconnect racing a banner tap
  * produces one pass instead of two concurrent passes that double-insert.
  */
-export function syncQueue(currentUserId: string): Promise<SyncResult> {
+export function syncQueue(
+  currentUserId: string,
+  options: SyncQueueOptions = {},
+): Promise<SyncResult> {
+  const { includeFailed = false } = options;
   if (!currentUserId) return Promise.resolve({ synced: 0, failed: 0 });
 
   return withQueueLock(async () => {
@@ -372,12 +553,24 @@ export function syncQueue(currentUserId: string): Promise<SyncResult> {
       // valid for the remaining entries.
       const entry = (await readQueue()).find((item) => item.id === target.id);
       if (!entry) continue;
+
+      // Hard cap: automatic sync leaves known-bad entries alone instead of
+      // retrying them on every reconnect. Only an explicit user retry
+      // (includeFailed) re-attempts them.
+      if (!includeFailed && isFailedEntry(entry)) continue;
+
       try {
         await uploadQueuedCatchUnlocked(entry);
         synced += 1;
       } catch (error) {
         console.error(`Error syncing queued catch ${entry.id}:`, error);
-        await bumpAttempts(entry.id);
+        // A deterministic rejection goes straight to failed rather than
+        // spending the remaining attempts rediscovering the same answer.
+        if (isPermanentFailure(error)) {
+          await markEntryFailed(entry.id);
+        } else {
+          await bumpAttempts(entry.id);
+        }
         failed += 1;
       }
     }

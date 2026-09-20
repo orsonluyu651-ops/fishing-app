@@ -106,6 +106,7 @@ export default function FeedScreen() {
   const runQueueSync = async (
     silent: boolean = false,
     userId: string | null = currentUserIdRef.current,
+    includeFailed: boolean = false,
   ) => {
     // Without a signed-in user there is nothing we are allowed to push: the
     // storage RLS only accepts writes under auth.uid()'s own folder.
@@ -117,7 +118,7 @@ export default function FeedScreen() {
     }
     setSyncingQueue(true);
     try {
-      const { synced, failed } = await syncQueue(userId);
+      const { synced, failed } = await syncQueue(userId, { includeFailed });
       const remaining = await loadQueue();
       setPendingEntries(pendingForUser(remaining, userId));
       if (!silent && synced > 0) {
@@ -135,6 +136,10 @@ export default function FeedScreen() {
       setSyncingQueue(false);
     }
   };
+
+  // An explicit retry from the banner: the user is asking, so entries that
+  // automatic sync now skips (already at the failure threshold) are included.
+  const retryQueuedCatches = () => runQueueSync(false, currentUserIdRef.current, true);
 
   useEffect(() => {
     let cancelled = false;
@@ -419,7 +424,7 @@ export default function FeedScreen() {
       {pendingEntries.length > 0 && (
         <TouchableOpacity
           style={[styles.syncBanner, failedCount > 0 && styles.syncBannerAlert]}
-          onPress={() => runQueueSync(false)}
+          onPress={retryQueuedCatches}
           disabled={syncingQueue}
           accessibilityRole="summary"
           accessibilityState={{ busy: syncingQueue }}
