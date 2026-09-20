@@ -22,6 +22,12 @@ export interface QueuedCatch {
   photoUri: string | null;
   createdAt: string;
   attempts: number;
+  /**
+   * Storage object path, written the moment a photo upload succeeds. Persisting
+   * it immediately is what lets a retry that follows a failed database insert
+   * skip the photo step instead of re-uploading the same object.
+   */
+  uploadedPath?: string | null;
 }
 
 const QUEUE_KEY = '@tidewire:pending_catches:v1';
@@ -67,24 +73,56 @@ function getStorage(): StorageLike {
   };
 }
 
-export async function loadQueue(): Promise<QueuedCatch[]> {
+// ── Serialized queue access (concurrency lock) ──────────────────────
+// Every mutation is funnelled through one promise chain, so overlapping
+// triggers — a NetInfo reconnect racing the user tapping the sync banner, or
+// two rapid offline submissions — can never interleave their
+// read-modify-write cycles. Without this, two concurrent syncs both read the
+// same queue and insert the same catch, and a racing enqueue can be dropped.
+let queueLock: Promise<unknown> = Promise.resolve();
+
+function withQueueLock<T>(task: () => Promise<T>): Promise<T> {
+  // Chain onto the previous task regardless of whether it settled or rejected,
+  // so a single failure can never wedge the lock for every later caller.
+  const result = queueLock.then(task, task);
+  queueLock = result.catch(() => undefined);
+  return result;
+}
+
+function parseQueue(raw: string | null): QueuedCatch[] {
+  if (!raw) return [];
   try {
-    const raw = await getStorage().getItem(QUEUE_KEY);
-    if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as QueuedCatch[]) : [];
+  } catch (error) {
+    console.error('Error parsing offline catch queue:', error);
+    return [];
+  }
+}
+
+// Unlocked read/write primitives. Only the public entry points above acquire
+// the lock; internal helpers must use these directly, because calling a locked
+// function from inside a locked section would deadlock against its own chain.
+async function readQueue(): Promise<QueuedCatch[]> {
+  try {
+    return parseQueue(await getStorage().getItem(QUEUE_KEY));
   } catch (error) {
     console.error('Error loading offline catch queue:', error);
     return [];
   }
 }
 
-async function saveQueue(queue: QueuedCatch[]): Promise<void> {
+async function writeQueue(queue: QueuedCatch[]): Promise<void> {
   try {
     await getStorage().setItem(QUEUE_KEY, JSON.stringify(queue));
   } catch (error) {
     console.error('Error saving offline catch queue (non-blocking):', error);
   }
+}
+
+/** Read the whole queue. Read-only, so it never needs the lock. */
+export async function loadQueue(): Promise<QueuedCatch[]> {
+  return readQueue();
 }
 
 export async function persistQueuedPhoto(sourceUri: string | null, queueId: string): Promise<string | null> {
@@ -114,33 +152,64 @@ function deleteQueuedPhoto(photoUri: string | null): void {
 }
 
 
-export async function enqueueCatch(entry: Omit<QueuedCatch, 'id' | 'attempts' | 'createdAt'>): Promise<QueuedCatch> {
-  const queue = await loadQueue();
-  const queued: QueuedCatch = {
-    ...entry,
-    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    attempts: 0,
-    createdAt: new Date().toISOString(),
-  };
-  queued.photoUri = await persistQueuedPhoto(entry.photoUri, queued.id);
-  queue.push(queued);
-  await saveQueue(queue);
-  return queued;
+export function enqueueCatch(
+  entry: Omit<QueuedCatch, 'id' | 'attempts' | 'createdAt' | 'uploadedPath'>,
+): Promise<QueuedCatch> {
+  // Locked: this is a read-modify-write on the shared queue. Unlocked, a second
+  // rapid offline submission (or a submit racing an in-flight sync) would read
+  // the same snapshot and overwrite the other's entry.
+  return withQueueLock(async () => {
+    const queue = await readQueue();
+    const queued: QueuedCatch = {
+      ...entry,
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      attempts: 0,
+      createdAt: new Date().toISOString(),
+      uploadedPath: null,
+    };
+    queued.photoUri = await persistQueuedPhoto(entry.photoUri, queued.id);
+    queue.push(queued);
+    await writeQueue(queue);
+    return queued;
+  });
 }
 
+// ── Unlocked queue mutations ────────────────────────────────────────
+// Callers must already hold the lock (syncQueue and enqueueCatch do). They go
+// through readQueue/writeQueue rather than the public API so they cannot
+// re-enter the lock their caller holds, which would deadlock.
+
 async function removeFromQueue(id: string): Promise<void> {
-  const queue = await loadQueue();
-  await saveQueue(queue.filter((item) => item.id !== id));
+  const queue = await readQueue();
+  await writeQueue(queue.filter((item) => item.id !== id));
 }
 
 async function bumpAttempts(id: string): Promise<void> {
-  const queue = await loadQueue();
-  await saveQueue(queue.map((item) => (item.id === id ? { ...item, attempts: item.attempts + 1 } : item)));
+  const queue = await readQueue();
+  await writeQueue(queue.map((item) => (item.id === id ? { ...item, attempts: item.attempts + 1 } : item)));
 }
 
-export async function uploadQueuedCatch(entry: QueuedCatch): Promise<string> {
-  let mediaPath: string | null = null;
-  if (entry.photoUri) {
+/**
+ * Records a successful photo upload onto the queued entry immediately.
+ *
+ * This closes the partial-failure trap: if the catches insert that follows then
+ * fails on a network drop, the entry already carries the uploaded path, so the
+ * next retry reuses it. Without it the retry re-uploads to a path that already
+ * exists and, because the bucket writes with `upsert: false`, can never succeed.
+ */
+async function markPhotoUploaded(id: string, uploadedPath: string): Promise<void> {
+  const queue = await readQueue();
+  await writeQueue(queue.map((item) => (item.id === id ? { ...item, uploadedPath } : item)));
+}
+
+// Real implementation. Assumes the caller holds the lock (syncQueue does).
+async function uploadQueuedCatchUnlocked(entry: QueuedCatch): Promise<string> {
+  // 1) Photo — skipped entirely when a previous attempt already uploaded it.
+  //    This is what makes a retry after a failed insert idempotent: the object
+  //    exists and the bucket writes with upsert: false, so uploading the same
+  //    path a second time could never succeed.
+  let mediaPath: string | null = entry.uploadedPath ?? null;
+  if (entry.photoUri && !mediaPath) {
     const extension = entry.photoUri.split('.').pop()?.split('?')[0]?.toLowerCase() || 'jpg';
     const filePath = `${entry.userId}/${entry.id}.${extension}`;
     const file = new File(entry.photoUri);
@@ -151,7 +220,11 @@ export async function uploadQueuedCatch(entry: QueuedCatch): Promise<string> {
       .from('catch-media')
       .upload(filePath, bytes, { contentType, upsert: false });
     if (uploadError) throw uploadError;
+
     mediaPath = filePath;
+    // Persist the progress *before* the insert, so a network drop between the
+    // two steps cannot strand the entry on a duplicate-upload retry loop.
+    await markPhotoUploaded(entry.id, filePath);
   }
 
   const { data, error } = await supabase
@@ -176,26 +249,64 @@ export async function uploadQueuedCatch(entry: QueuedCatch): Promise<string> {
   return data.id as string;
 }
 
+/**
+ * Replays one queued catch. Exported for direct use, but takes the lock so it
+ * can never race a background sync. syncQueue calls the unlocked variant
+ * because it already holds the lock.
+ */
+export function uploadQueuedCatch(entry: QueuedCatch): Promise<string> {
+  return withQueueLock(() => uploadQueuedCatchUnlocked(entry));
+}
+
 export interface SyncResult {
   synced: number;
   failed: number;
 }
 
-export async function syncQueue(): Promise<SyncResult> {
-  const queue = await loadQueue();
-  let synced = 0;
-  let failed = 0;
-  for (const entry of queue) {
-    try {
-      await uploadQueuedCatch(entry);
-      synced += 1;
-    } catch (error) {
-      console.error(`Error syncing queued catch ${entry.id}:`, error);
-      await bumpAttempts(entry.id);
-      failed += 1;
+/** Entries belonging to one user. Single source of truth for the scoping rule. */
+export function pendingForUser(queue: QueuedCatch[], userId: string | null): QueuedCatch[] {
+  if (!userId) return [];
+  return queue.filter((entry) => entry.userId === userId);
+}
+
+/**
+ * Flushes the queue for the signed-in user, oldest first.
+ *
+ * Scoped to `currentUserId` deliberately: the catch-media bucket RLS only
+ * accepts writes under a folder named after auth.uid(), so replaying another
+ * account's queued catch would always be rejected and would strand that entry.
+ * Catches queued by a different user are left untouched until their owner
+ * signs back in.
+ *
+ * Runs inside the queue lock, so a NetInfo reconnect racing a banner tap
+ * produces one pass instead of two concurrent passes that double-insert.
+ */
+export function syncQueue(currentUserId: string): Promise<SyncResult> {
+  if (!currentUserId) return Promise.resolve({ synced: 0, failed: 0 });
+
+  return withQueueLock(async () => {
+    const queue = await readQueue();
+    const targets = pendingForUser(queue, currentUserId);
+
+    let synced = 0;
+    let failed = 0;
+    for (const target of targets) {
+      // Re-read under the lock so we always upload exactly what is stored. A
+      // failed attempt below leaves its entry in place, so the snapshot stays
+      // valid for the remaining entries.
+      const entry = (await readQueue()).find((item) => item.id === target.id);
+      if (!entry) continue;
+      try {
+        await uploadQueuedCatchUnlocked(entry);
+        synced += 1;
+      } catch (error) {
+        console.error(`Error syncing queued catch ${entry.id}:`, error);
+        await bumpAttempts(entry.id);
+        failed += 1;
+      }
     }
-  }
-  return { synced, failed };
+    return { synced, failed };
+  });
 }
 
 export function isNetworkError(error: any): boolean {

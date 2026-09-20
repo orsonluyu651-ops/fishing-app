@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, Modal, Image, Alert, LayoutAnimation } from 'react-native';
 import { supabase } from '../../src/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,6 +10,7 @@ import {
   enqueueCatch,
   isNetworkError,
   loadQueue,
+  pendingForUser,
   syncQueue,
 } from '../../src/lib/offlineCatchQueue';
 import { askAssistant, type AssistantAnswer } from '../../src/lib/assistant';
@@ -46,15 +47,22 @@ export default function FeedScreen() {
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [newComment, setNewComment] = useState('');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  // Mirror of currentUserId for callbacks registered once on mount (the NetInfo
+  // listener). Without it those callbacks close over the initial null and would
+  // never be able to scope a sync to the signed-in user.
+  const currentUserIdRef = useRef<string | null>(null);
   const [assistantVisible, setAssistantVisible] = useState(false);
   const [assistantQuery, setAssistantQuery] = useState('');
   const [assistantAnswer, setAssistantAnswer] = useState<AssistantAnswer | null>(null);
   const [assistantLoading, setAssistantLoading] = useState(false);
 
-  const initializeFeed = async () => {
+  const initializeFeed = async (): Promise<string | null> => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) setCurrentUserId(user.id);
+      if (user) {
+        setCurrentUserId(user.id);
+        currentUserIdRef.current = user.id;
+      }
 
       const { data, error } = await supabase.from('feed_posts').select('*');
 
@@ -79,24 +87,33 @@ export default function FeedScreen() {
     } finally {
       setLoading(false);
     }
+    return currentUserIdRef.current;
   };
 
-  const refreshPendingCount = async () => {
+  const refreshPendingCount = async (userId: string | null = currentUserIdRef.current) => {
+    // Scope the badge to this user: catches queued by another account stay
+    // parked until their owner signs in, so they are not "waiting to sync" here.
     const queue = await loadQueue();
-    setPendingCount(queue.length);
+    setPendingCount(pendingForUser(queue, userId).length);
   };
 
-  const runQueueSync = async (silent: boolean = false) => {
+  const runQueueSync = async (
+    silent: boolean = false,
+    userId: string | null = currentUserIdRef.current,
+  ) => {
+    // Without a signed-in user there is nothing we are allowed to push: the
+    // storage RLS only accepts writes under auth.uid()'s own folder.
+    if (!userId) return;
     const queue = await loadQueue();
-    if (queue.length === 0) {
+    if (pendingForUser(queue, userId).length === 0) {
       setPendingCount(0);
       return;
     }
     setSyncingQueue(true);
     try {
-      const { synced, failed } = await syncQueue();
+      const { synced, failed } = await syncQueue(userId);
       const remaining = await loadQueue();
-      setPendingCount(remaining.length);
+      setPendingCount(pendingForUser(remaining, userId).length);
       if (!silent && synced > 0) {
         Alert.alert(
           'Offline catches synced',
@@ -114,14 +131,28 @@ export default function FeedScreen() {
   };
 
   useEffect(() => {
-    initializeFeed();
-    refreshPendingCount();
+    let cancelled = false;
+
+    const bootstrap = async () => {
+      const userId = await initializeFeed();
+      if (cancelled) return;
+      await refreshPendingCount(userId);
+      // Flush anything left over from a previous session now that we know who
+      // is signed in, instead of waiting for the next connectivity change.
+      await runQueueSync(true, userId);
+    };
+    bootstrap();
+
     const unsubscribe = NetInfo.addEventListener((state) => {
       if (state.isConnected && state.isInternetReachable !== false) {
-        runQueueSync(true);
+        runQueueSync(true, currentUserIdRef.current);
       }
     });
-    return () => unsubscribe();
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   const handleLike = async (postId: string, hasLiked: boolean) => {
