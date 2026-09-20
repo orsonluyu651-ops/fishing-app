@@ -33,6 +33,29 @@ export interface QueuedCatch {
 const QUEUE_KEY = '@tidewire:pending_catches:v1';
 const PHOTO_DIR_NAME = 'pending-catch-photos';
 
+// client_queue_id has to be a real UUID: the column is typed uuid and doubles as
+// the dedupe key for a replayed insert (migration 0015). Entries written before
+// this existed carry a timestamp-based id, so the pattern is also used to decide
+// whether dedupe can be offered for a given entry.
+const CLIENT_QUEUE_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Generates the idempotency key for one catch. Exported so a caller that writes
+// a catch directly can mint the id up front and hand the SAME value to the queue
+// if that write fails - otherwise a committed-but-unacknowledged insert would be
+// replayed under a fresh id and duplicated.
+export function newQueueId(): string {
+  const webCrypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (typeof webCrypto?.randomUUID === 'function') return webCrypto.randomUUID();
+  // RFC 4122 v4 built on Math.random. This value only has to be unique, never
+  // unguessable - it is an idempotency key, not a credential or a token.
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const random = (Math.random() * 16) | 0;
+    const value = char === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
 // ── Expo Go-safe storage ────────────────────────────────────────────
 // Lazily require AsyncStorage so a missing/broken native module never throws
 // at import time. If the native module is null (standard Expo Go), every call
@@ -152,8 +175,17 @@ function deleteQueuedPhoto(photoUri: string | null): void {
 }
 
 
+/**
+ * Adds a catch to the queue, oldest-last.
+ *
+ * `presetId` lets a caller that already attempted a direct insert reuse that
+ * attempt's client_queue_id for the queued retry, so the retry deduplicates
+ * against a row that may have committed without its response arriving. Callers
+ * must pass a value from newQueueId(); a non-UUID would simply lose dedupe.
+ */
 export function enqueueCatch(
   entry: Omit<QueuedCatch, 'id' | 'attempts' | 'createdAt' | 'uploadedPath'>,
+  presetId?: string,
 ): Promise<QueuedCatch> {
   // Locked: this is a read-modify-write on the shared queue. Unlocked, a second
   // rapid offline submission (or a submit racing an in-flight sync) would read
@@ -162,7 +194,7 @@ export function enqueueCatch(
     const queue = await readQueue();
     const queued: QueuedCatch = {
       ...entry,
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id: presetId ?? newQueueId(),
       attempts: 0,
       createdAt: new Date().toISOString(),
       uploadedPath: null,
@@ -227,26 +259,60 @@ async function uploadQueuedCatchUnlocked(entry: QueuedCatch): Promise<string> {
     await markPhotoUploaded(entry.id, filePath);
   }
 
+  // 2) Row insert, deduplicated on the queue entry's own UUID.
+  //
+  // upsert with ignoreDuplicates maps to ON CONFLICT (client_queue_id) DO
+  // NOTHING, so replaying an already-committed catch is a no-op instead of a
+  // 23505 unique violation. Because the conflicting row is never inserted, the
+  // AFTER INSERT create_feed_post_on_catch trigger does not fire again either,
+  // so a retry cannot mint a second feed post.
+  const canDedupe = CLIENT_QUEUE_ID_PATTERN.test(entry.id);
+
+  // .select() deliberately without .single(): a deduplicated upsert returns ZERO
+  // rows, and .single() would surface that as a PGRST116 error rather than the
+  // successful sync that it actually is.
   const { data, error } = await supabase
     .from('catches')
-    .insert({
-      user_id: entry.userId,
-      species: entry.species,
-      length: entry.length,
-      media_path: mediaPath,
-      environmental:
-        entry.latitude !== null && entry.longitude !== null
-          ? { latitude: entry.latitude, longitude: entry.longitude }
-          : {},
-      captured_at: entry.createdAt,
-    })
-    .select('id')
-    .single();
+    .upsert(
+      {
+        user_id: entry.userId,
+        species: entry.species,
+        length: entry.length,
+        media_path: mediaPath,
+        environmental:
+          entry.latitude !== null && entry.longitude !== null
+            ? { latitude: entry.latitude, longitude: entry.longitude }
+            : {},
+        captured_at: entry.createdAt,
+        // Legacy entries predate UUID ids; syncing them without the key is better
+        // than failing the uuid cast and stranding them forever.
+        ...(canDedupe ? { client_queue_id: entry.id } : {}),
+      },
+      { onConflict: 'client_queue_id', ignoreDuplicates: true },
+    )
+    .select('id');
   if (error) throw error;
+
+  let catchId = (data?.[0]?.id as string | undefined) ?? null;
+  if (!catchId && canDedupe) {
+    // Zero rows means the conflict was ignored, i.e. an earlier attempt already
+    // committed this catch and only its response was lost. Recover the id so the
+    // queue entry can still be cleared instead of retrying forever.
+    const { data: existing, error: lookupError } = await supabase
+      .from('catches')
+      .select('id')
+      .eq('client_queue_id', entry.id)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+    catchId = (existing?.id as string | undefined) ?? null;
+  }
+  if (!catchId) {
+    throw new Error('Catch insert returned no row and no existing catch was found.');
+  }
 
   deleteQueuedPhoto(entry.photoUri);
   await removeFromQueue(entry.id);
-  return data.id as string;
+  return catchId;
 }
 
 /**

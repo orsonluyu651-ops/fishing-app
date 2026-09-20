@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, Modal, Image, Alert, LayoutAnimation } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, Modal, Image, Alert, LayoutAnimation, AppState } from 'react-native';
 import { supabase } from '../../src/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
@@ -10,6 +10,7 @@ import {
   enqueueCatch,
   isNetworkError,
   loadQueue,
+  newQueueId,
   pendingForUser,
   syncQueue,
 } from '../../src/lib/offlineCatchQueue';
@@ -143,15 +144,30 @@ export default function FeedScreen() {
     };
     bootstrap();
 
-    const unsubscribe = NetInfo.addEventListener((state) => {
+    const unsubscribeNetInfo = NetInfo.addEventListener((state) => {
       if (state.isConnected && state.isInternetReachable !== false) {
         runQueueSync(true, currentUserIdRef.current);
       }
     });
 
+    // A connectivity *change* is not the only moment a pending queue deserves a
+    // chance to flush. An app killed while offline and relaunched while online,
+    // or resumed after the user switched away, may never observe a transition.
+    // The 'active' foreground state covers both. It only fires on transitions,
+    // so it does not duplicate the bootstrap sync above.
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') return;
+      const userId = currentUserIdRef.current;
+      refreshPendingCount(userId);
+      runQueueSync(true, userId);
+    });
+
     return () => {
       cancelled = true;
-      unsubscribe();
+      // NetInfo hands back a bare unsubscribe function; AppState hands back an
+      // EmitterSubscription. Hence the two different shapes.
+      unsubscribeNetInfo();
+      appStateSubscription.remove();
     };
   }, []);
 
@@ -227,6 +243,12 @@ export default function FeedScreen() {
       return;
     }
 
+    // Mint this catch's idempotency key BEFORE the first write. Declared outside
+    // the try so the offline fallback can hand the very same id to the queue: if
+    // this insert commits but its response is lost, the queued retry then
+    // deduplicates against that row instead of logging a second catch.
+    const clientQueueId = newQueueId();
+
     try {
       setSubmittingCatch(true);
 
@@ -253,22 +275,29 @@ export default function FeedScreen() {
       const environmental: { latitude: number; longitude: number } | Record<string, never> = location
         ? { latitude: location.latitude, longitude: location.longitude }
         : {};
+      // upsert with ignoreDuplicates rather than a plain insert: client_queue_id
+      // is unique, so repeating the same submit is skipped instead of raising
+      // 23505, and a deduplicated write returns zero rows - a success, not an
+      // error, hence .select() without .single().
       const { data: inserted, error: insertError } = await supabase
         .from('catches')
-        .insert({
-          user_id: currentUserId,
-          species: trimmedSpecies,
-          length: parsedLength,
-          media_path: mediaPath,
-          environmental,
-        })
-        .select('id')
-        .single();
+        .upsert(
+          {
+            user_id: currentUserId,
+            client_queue_id: clientQueueId,
+            species: trimmedSpecies,
+            length: parsedLength,
+            media_path: mediaPath,
+            environmental,
+          },
+          { onConflict: 'client_queue_id', ignoreDuplicates: true },
+        )
+        .select('id');
       if (insertError) throw insertError;
 
       // 3) Refresh the feed (the create_feed_post_on_catch trigger auto-creates the post).
       console.log('Catch Logged:', {
-        catchId: inserted?.id,
+        catchId: inserted?.[0]?.id ?? null,
         species: trimmedSpecies,
         length: parsedLength,
         location,
@@ -281,14 +310,20 @@ export default function FeedScreen() {
       console.error('Error submitting catch:', error);
       if (isNetworkError(error)) {
         try {
-          await enqueueCatch({
-            userId: currentUserId,
-            species: trimmedSpecies,
-            length: parsedLength,
-            latitude: location?.latitude ?? null,
-            longitude: location?.longitude ?? null,
-            photoUri,
-          });
+          // Same id as the direct attempt above: if that write actually committed
+          // and only its response was lost, the replay deduplicates against it
+          // instead of logging a second catch.
+          await enqueueCatch(
+            {
+              userId: currentUserId,
+              species: trimmedSpecies,
+              length: parsedLength,
+              latitude: location?.latitude ?? null,
+              longitude: location?.longitude ?? null,
+              photoUri,
+            },
+            clientQueueId,
+          );
           await refreshPendingCount();
           Alert.alert(
             'Saved offline',
