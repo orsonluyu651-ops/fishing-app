@@ -7,6 +7,7 @@ import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import { File } from 'expo-file-system';
 import {
+  discardQueuedCatch,
   enqueueCatch,
   FAILED_ATTEMPT_THRESHOLD,
   isFailedEntry,
@@ -140,6 +141,33 @@ export default function FeedScreen() {
   // An explicit retry from the banner: the user is asking, so entries that
   // automatic sync now skips (already at the failure threshold) are included.
   const retryQueuedCatches = () => runQueueSync(false, currentUserIdRef.current, true);
+
+  /**
+   * Drops one stuck catch from the device.
+   *
+   * Asks first because it is destructive and irreversible: the queue entry and
+   * its cached photo are both erased and the catch never reached the feed.
+   * Drop the Alert wrapper if a single tap is preferred.
+   */
+  const handleDiscardQueuedCatch = (entry: QueuedCatch) => {
+    Alert.alert(
+      'Discard queued catch?',
+      `"${entry.species}" never reached the feed. Discarding removes it from this device permanently.`,
+      [
+        { text: 'Keep', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: async () => {
+            const discarded = await discardQueuedCatch(entry.id);
+            if (!discarded) return;
+            // Re-read the queue so the card unmounts immediately.
+            await refreshPendingQueue(currentUserIdRef.current);
+          },
+        },
+      ],
+    );
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -453,12 +481,15 @@ export default function FeedScreen() {
             <View style={styles.pendingList}>
               {pendingEntries.map((entry) => {
                 const failedEntry = isFailedEntry(entry);
+                // The card is grouped into one screen-reader element only while
+                // there is nothing actionable inside it. Grouping a card that
+                // holds a Discard button would hide that button from assistive
+                // tech, so `accessible` is switched off for failed entries.
                 return (
                   <View
                     key={entry.id}
                     style={[styles.card, styles.pendingCard]}
-                    pointerEvents="none"
-                    accessible
+                    accessible={!failedEntry}
                     accessibilityRole="summary"
                     accessibilityLabel={
                       `Queued catch, ${entry.species}` +
@@ -470,14 +501,29 @@ export default function FeedScreen() {
                     }
                   >
                     <View style={styles.pendingBadgeRow}>
-                      <Ionicons
-                        name={failedEntry ? 'alert-circle-outline' : 'cloud-upload-outline'}
-                        size={13}
-                        color={failedEntry ? '#B91C1C' : '#B45309'}
-                      />
-                      <Text style={[styles.pendingBadge, failedEntry && styles.pendingBadgeAlert]}>
-                        {failedEntry ? 'Needs attention' : 'Queued offline'}
-                      </Text>
+                      <View style={styles.pendingBadgeGroup}>
+                        <Ionicons
+                          name={failedEntry ? 'alert-circle-outline' : 'cloud-upload-outline'}
+                          size={13}
+                          color={failedEntry ? '#B91C1C' : '#B45309'}
+                        />
+                        <Text style={[styles.pendingBadge, failedEntry && styles.pendingBadgeAlert]}>
+                          {failedEntry ? 'Needs attention' : 'Queued offline'}
+                        </Text>
+                      </View>
+                      {failedEntry ? (
+                        <TouchableOpacity
+                          style={styles.pendingDiscard}
+                          onPress={() => handleDiscardQueuedCatch(entry)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Discard queued catch, ${entry.species}`}
+                          accessibilityHint="Removes this catch and its photo from this device"
+                        >
+                          <Ionicons name="trash-outline" size={13} color="#B91C1C" />
+                          <Text style={styles.pendingDiscardText}>Discard</Text>
+                        </TouchableOpacity>
+                      ) : null}
                     </View>
                     <Text style={styles.title}>
                       🐟 {entry.species}
@@ -729,7 +775,10 @@ const styles = StyleSheet.create({
   syncBannerTextAlert: { color: '#B91C1C' },
   pendingList: { marginBottom: 4 },
   pendingCard: { opacity: 0.6, borderStyle: 'dashed', backgroundColor: '#f1f5f9' },
-  pendingBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 6 },
+  pendingBadgeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
+  pendingBadgeGroup: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  pendingDiscard: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
+  pendingDiscardText: { fontSize: 11, fontWeight: '700', color: '#B91C1C' },
   pendingBadge: { fontSize: 11, fontWeight: '700', color: '#B45309', letterSpacing: 0.5 },
   pendingBadgeAlert: { color: '#B91C1C' },
   fab: { position: 'absolute', bottom: 20, right: 20, backgroundColor: '#007AFF', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', elevation: 5 },
