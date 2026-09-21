@@ -40,4 +40,7 @@ export type Profile = {
   // the migration is applied — src/lib/notifications.ts writes it, the
   // tide-alerts Edge Function reads it with the service role.
   expo_push_token?: string | null;
+  // Migration 0017 (premium subscriptions). Optional so the app still compiles
+  // before the migration is applied — treat `undefined` as "not pro".
+  is_pro?: boolean;
 };

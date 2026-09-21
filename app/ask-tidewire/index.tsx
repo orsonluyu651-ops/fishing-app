@@ -20,6 +20,8 @@ import {
   describeAskTidewireError,
   type AskTidewireTurn,
 } from '../../src/lib/askTidewire';
+import { usePremiumStatus } from '@/lib/premiumAccess';
+import { PremiumPaywall } from '@/components/PremiumPaywall';
 
 // ════════════════════════════════════════════════════════════
 // Ask TideWire — the streaming/chat interface.
@@ -57,7 +59,7 @@ function formatTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-type Gate = 'checking' | 'signin' | 'ok';
+type Gate = 'checking' | 'signin' | 'pending-premium' | 'paywall' | 'ok';
 
 export default function AskTidewireScreen() {
   const router = useRouter();
@@ -68,15 +70,45 @@ export default function AskTidewireScreen() {
   const [pending, setPending] = useState(false);
 
   // ── Gate: the Edge Function requires a signed-in session (401 otherwise). ──
+    const { isPro, loading: premiumLoading } = usePremiumStatus();
+
+  // ── Gate: the Edge Function requires a signed-in session (401 otherwise). ──
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setGate(session ? 'ok' : 'signin');
+      setGate(session ? 'pending-premium' : 'signin');
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setGate(session ? 'ok' : 'signin');
+      setGate(session ? 'pending-premium' : 'signin');
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  // Once the session is confirmed, resolve the premium gate.
+  useEffect(() => {
+    if (gate === 'pending-premium' && !premiumLoading) {
+      setGate(isPro ? 'ok' : 'paywall');
+    }
+  }, [gate, premiumLoading, isPro]);
+
+  // Re-check premium status after a successful upgrade.
+  const handleUpgradeSuccess = useCallback(
+    async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) {
+        setGate('signin');
+        return;
+      }
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('is_pro')
+        .eq('id', session.user.id)
+        .maybeSingle();
+      if (profile?.is_pro === true) {
+        setGate('ok');
+      }
+    },
+    [],
+  );
 
   // Report-only regional context for the guide. Permission is checked, never
   // requested from this screen; no fix and no permission means no coordinates.
@@ -145,7 +177,7 @@ export default function AskTidewireScreen() {
   }, [canSend, input, send]);
 
   // ── Render ───────────────────────────────────────────────────────────────
-  if (gate === 'checking') {
+    if (gate === 'checking' || gate === 'pending-premium') {
     return (
       <View style={[styles.container, styles.center]}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -169,6 +201,14 @@ export default function AskTidewireScreen() {
         >
           <Text style={styles.buttonText}>Sign in</Text>
         </TouchableOpacity>
+      </View>
+    );
+  }
+
+    if (gate === 'paywall') {
+    return (
+      <View style={[styles.container, styles.center]}>
+        <PremiumPaywall onUpgradeSuccess={handleUpgradeSuccess} />
       </View>
     );
   }

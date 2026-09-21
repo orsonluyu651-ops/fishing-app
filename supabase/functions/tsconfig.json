@@ -1,4 +1,15 @@
 {
+  // Standalone type-checking project for the Deno Edge Functions, independent
+  // of the Expo app's root tsconfig (which excludes this folder entirely).
+  //
+  // Note on libs: `deno.window` / `deno.ns` are internal to the Deno CLI's
+  // bundled TypeScript and are rejected by plain `tsc` (TS6046) — and Deno is
+  // not installed in this workspace. The `Deno` namespace (env, serve) is
+  // therefore provided here by the ambient declarations in ./deno-shims.d.ts,
+  // with DOM/ESNext supplying the web-standard globals the functions use.
+  // Inside VS Code the real Deno types come from the Deno language server,
+  // which is enabled for this folder only via .vscode/settings.json
+  // (deno.enablePaths: ["supabase/functions"]).
   "compilerOptions": {
     "target": "ESNext",
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
@@ -12,3 +23,4 @@
   "include": ["**/*.ts"],
   "exclude": ["node_modules"]
 }
+

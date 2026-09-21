@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, UrlTile } from 'react-native-maps';
 import NetInfo from '@react-native-community/netinfo';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +12,9 @@ import {
   regionToBbox,
   zoomForRegion,
 } from '../../src/lib/mapTileCache';
+import { countCachedTiles } from '@/lib/mapTileCache';
+import { usePremiumStatus } from '@/lib/premiumAccess';
+import { PremiumPaywall } from '@/components/PremiumPaywall';
 
 // ════════════════════════════════════════════════════════════
 // TidewireMap — the Guide tab's interactive OSM map with an
@@ -70,7 +73,10 @@ export default function TidewireMap() {
   const buttonAbortRef = useRef<AbortController | null>(null);
   const prefetchAbortRef = useRef<AbortController | null>(null);
   const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { isPro } = usePremiumStatus();
+  const [showPaywall, setShowPaywall] = useState(false);
 
   // ── Online/offline interception (@react-native-community/netinfo) ──────
   useEffect(() => {
@@ -147,8 +153,16 @@ export default function TidewireMap() {
   );
 
   // ── Explicit "Cache Current Region" run ─────────────────────────────────
-  const handleCacheRegion = useCallback(async () => {
+    const handleCacheRegion = useCallback(async () => {
     if (!isOnline || progress) return;
+
+    // ── Premium gate: free users capped at 3 cached tiles ──
+    const cachedCount = countCachedTiles();
+    if (cachedCount > 3 && !isPro) {
+      setShowPaywall(true);
+      return;
+    }
+
     // One explicit run at a time; cancel any straggling background prefetch.
     prefetchAbortRef.current?.abort();
     buttonAbortRef.current?.abort();
@@ -187,7 +201,7 @@ export default function TidewireMap() {
     } finally {
       setProgress(null);
     }
-  }, [isOnline, progress, region, showStatus]);
+    }, [isOnline, progress, region, showStatus, isPro]);
 
   const cachePercent =
     progress && progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
@@ -308,13 +322,30 @@ export default function TidewireMap() {
               {spot.name}
             </Text>
           </TouchableOpacity>
-        ))}
+                ))}
       </View>
+
+      {showPaywall && (
+        <Modal visible transparent animationType="fade" statusBarTranslucent>
+          <View style={styles.paywallOverlay}>
+            <PremiumPaywall
+              onUpgradeSuccess={() => setShowPaywall(false)}
+              onClose={() => setShowPaywall(false)}
+            />
+          </View>
+        </Modal>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  paywallOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   card: {
     backgroundColor: '#fff',
     padding: 16,
