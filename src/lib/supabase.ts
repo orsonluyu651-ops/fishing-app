@@ -36,4 +36,8 @@ export type Profile = {
   // and behaves sanely if that migration hasn't been applied yet — treat
   // `undefined` as "not an admin".
   is_admin?: boolean;
+  // Migration 0016 (push tokens). Optional so the app still compiles before
+  // the migration is applied — src/lib/notifications.ts writes it, the
+  // tide-alerts Edge Function reads it with the service role.
+  expo_push_token?: string | null;
 };

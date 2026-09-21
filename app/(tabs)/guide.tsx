@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
-import RegionPreviewMap from '../../src/components/RegionPreviewMap';
+import TidewireMap from '../../src/components/TidewireMap';
 
 export default function GuideScreen() {
   return (
@@ -13,7 +13,7 @@ export default function GuideScreen() {
 
       {/* 🗺️ Interactive GPS Map Integration Canvas */}
       <Text style={styles.sectionTitle}>Interactive GPS Fishing Hotspots</Text>
-      <RegionPreviewMap />
+      <TidewireMap />
       {/* 📝 Local Fishing QLD Regulations */}
       <Text style={styles.sectionTitle}>Local Regulations & Slot Limits</Text>
       <View style={styles.regCard}>

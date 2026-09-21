@@ -18,6 +18,8 @@ import {
   syncQueue,
   type QueuedCatch,
 } from '../../src/lib/offlineCatchQueue';
+import { updateQueuedCatchEntry } from '../../src/lib/offlineQueueMutation';
+import { optimizeCatchImage } from '../../src/lib/mediaOptimizer';
 import { askAssistant, type AssistantAnswer } from '../../src/lib/assistant';
 
 interface CatchItem {
@@ -32,12 +34,45 @@ interface CatchItem {
   has_liked: boolean;
 }
 
+interface CommentItem {
+  id: string;
+  text: string;
+  created_at: string;
+  profiles: { username: string };
+  // True while the optimistic copy is still waiting on its database insert.
+  pending?: boolean;
+}
+
+// Strict page size for the windowed feed query: every scroll iteration pulls
+// exactly this many rows via .range(start, start + PAGE_SIZE - 1).
+const PAGE_SIZE = 10;
+
+// Longest comment the database CHECK constraint accepts
+// (char_length(btrim(text)) between 1 and 1000) — enforced client-side so an
+// over-long comment fails instantly instead of on the wire.
+const MAX_COMMENT_LENGTH = 1000;
+
+const formatCommentTime = (iso: string) => {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+};
+
 export default function FeedScreen() {
   const animateLayout = () =>
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
 
   const [catches, setCatches] = useState<CatchItem[]>([]);
   const [loading, setLoading] = useState(true);
+  // Pagination state: loadingMore mirrors the in-flight "next page" fetch and
+  // hasMore turns off once a window comes back short (or empty).
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [commentModalVisible, setCommentModalVisible] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [species, setSpecies] = useState('');
@@ -53,15 +88,71 @@ export default function FeedScreen() {
   const [syncingQueue, setSyncingQueue] = useState(false);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [newComment, setNewComment] = useState('');
+  // State for editing a failed/queued catch entry
+  const [editingEntry, setEditingEntry] = useState<QueuedCatch | null>(null);
+  const [editSpecies, setEditSpecies] = useState('');
+  const [editLength, setEditLength] = useState('');
+  const [editPhotoUri, setEditPhotoUri] = useState<string | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  // The contextual comment list for the currently open post, plus its loader.
+  const [comments, setComments] = useState<CommentItem[]>([]);
+  const [loadingComments, setLoadingComments] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   // Mirror of currentUserId for callbacks registered once on mount (the NetInfo
   // listener). Without it those callbacks close over the initial null and would
   // never be able to scope a sync to the signed-in user.
   const currentUserIdRef = useRef<string | null>(null);
+  // Mirror of the rendered feed rows, kept in lockstep with every setCatches
+  // (and re-synced by the effect below). Callbacks that must read the freshest
+  // list — the pagination offset and per-post like toggles — read this instead
+  // of closing over stale render state.
+  const catchesRef = useRef<CatchItem[]>([]);
+  // One promise chain per post id: a rapid double-tap on the like button
+  // queues behind the previous toggle instead of racing an insert against a
+  // delete for the same row.
+  const likeChainsRef = useRef<Map<string, Promise<void>>>(new Map());
   const [assistantVisible, setAssistantVisible] = useState(false);
   const [assistantQuery, setAssistantQuery] = useState('');
   const [assistantAnswer, setAssistantAnswer] = useState<AssistantAnswer | null>(null);
   const [assistantLoading, setAssistantLoading] = useState(false);
+
+  // Keep the row mirror in lockstep with state (pagination and optimistic
+  // interactions also write it directly; this is the safety net for the rest).
+  useEffect(() => {
+    catchesRef.current = catches;
+  }, [catches]);
+
+  /**
+   * Maps one raw feed_posts row onto the card shape the list renders.
+   */
+  const toCatchItem = (item: any): CatchItem => ({
+    id: item.id || Math.random().toString(),
+    title: item.caption || item.title || 'Fishing Catch',
+    species: item.species || 'Unknown Species',
+    location_name: item.location_name || 'Gold Coast Waters',
+    user_id: item.user_id,
+    profiles: { username: item.username || 'Anonymous Angler' },
+    likes_count: item.likes_count ?? 0,
+    comments_count: item.comments_count ?? 0,
+    has_liked: item.is_liked_by_me ?? false,
+  });
+
+  /**
+   * Pulls one window of feed rows. The ordering is fixed (newest first, id as
+   * the tiebreaker) so the .range() windows stay stable across pages — without
+   * a deterministic sort, pages could overlap or skip rows. start/end are
+   * inclusive row indices; each window is exactly PAGE_SIZE rows.
+   */
+  const fetchFeedPage = async (start: number): Promise<any[]> => {
+    const { data, error } = await supabase
+      .from('feed_posts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(start, start + PAGE_SIZE - 1);
+    if (error) throw error;
+    return data ?? [];
+  };
 
   const initializeFeed = async (): Promise<string | null> => {
     try {
@@ -71,30 +162,52 @@ export default function FeedScreen() {
         currentUserIdRef.current = user.id;
       }
 
-      const { data, error } = await supabase.from('feed_posts').select('*');
-
-      if (!error && data) {
-        const formattedCatches = data.map((item: any) => ({
-          id: item.id || Math.random().toString(),
-          title: item.caption || item.title || 'Fishing Catch',
-          species: item.species || 'Unknown Species',
-          location_name: item.location_name || 'Gold Coast Waters',
-          user_id: item.user_id,
-          profiles: { username: item.username || 'Anonymous Angler' },
-          likes_count: item.likes_count ?? 0,
-          comments_count: item.comments_count ?? 0,
-          has_liked: item.is_liked_by_me ?? false,
-        }));
-        setCatches(formattedCatches);
-      } else if (error) {
-        console.error("Supabase view error:", error.message);
-      }
+      // Page 0 resets the pagination window: a refresh (new catch logged,
+      // offline queue flushed) re-reads the newest rows and drops older pages a
+      // fresh sort may have shifted.
+      const rows = await fetchFeedPage(0);
+      const formattedCatches = rows.map(toCatchItem);
+      catchesRef.current = formattedCatches;
+      setCatches(formattedCatches);
+      // A short first window means the whole feed fits on one page — stop here
+      // instead of firing an empty "next page" request on the first scroll.
+      setHasMore(rows.length >= PAGE_SIZE);
     } catch (err) {
-      console.error(err);
+      console.error('Supabase feed error:', err);
     } finally {
       setLoading(false);
     }
     return currentUserIdRef.current;
+  };
+
+  /**
+   * Appends the next PAGE_SIZE rows when the user scrolls into the lower 20%
+   * of the list (onEndReachedThreshold). Guarded so at most one window is ever
+   * in flight, and deduplicated by id: a catch posted between two page fetches
+   * shifts every window down, so a naive append could repeat a rendered row.
+   */
+  const loadMoreCatches = async () => {
+    if (loading || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const start = catchesRef.current.length;
+      const rows = await fetchFeedPage(start);
+      const seenIds = new Set(catchesRef.current.map((item) => item.id));
+      const fresh = rows.map(toCatchItem).filter((item) => !seenIds.has(item.id));
+      const merged = [...catchesRef.current, ...fresh];
+      catchesRef.current = merged;
+      setCatches(merged);
+      // The feed has ended when a window comes back short — or when a full
+      // window's rows were all duplicates of what is already rendered.
+      setHasMore(rows.length >= PAGE_SIZE && fresh.length > 0);
+    } catch (error: any) {
+      // A failed page load keeps the already-rendered feed usable; hasMore
+      // stays true so the next scroll attempt retries the same window.
+      console.error('Error loading more catches:', error);
+      setHasMore(true);
+    } finally {
+      setLoadingMore(false);
+    }
   };
 
   const refreshPendingQueue = async (userId: string | null = currentUserIdRef.current) => {
@@ -169,6 +282,68 @@ export default function FeedScreen() {
     );
   };
 
+  /**
+   * Opens the edit modal for a failed/queued catch entry.
+   * Pre-fills the form with the entry's current data.
+   */
+  const openEditDraft = (entry: QueuedCatch) => {
+    setEditingEntry(entry);
+    setEditSpecies(entry.species);
+    setEditLength(entry.length?.toString() ?? '');
+    setEditPhotoUri(entry.photoUri);
+  };
+
+  /**
+   * Closes the edit modal without saving.
+   */
+  const closeEditDraft = () => {
+    setEditingEntry(null);
+    setEditSpecies('');
+    setEditLength('');
+    setEditPhotoUri(null);
+  };
+
+  /**
+   * Saves edits to a queued catch entry.
+   * Uses optimistic UI updates after the mutation succeeds.
+   */
+  const saveEditDraft = async () => {
+    if (!editingEntry) return;
+
+    if (!editSpecies.trim()) {
+      Alert.alert('Species required', 'Please enter the fish species.');
+      return;
+    }
+
+    setIsSavingEdit(true);
+
+    try {
+      // Build partial update data
+      const partialData: Partial<QueuedCatch> = {
+        species: editSpecies.trim(),
+        length: editLength ? parseFloat(editLength) : null,
+        photoUri: editPhotoUri,
+      };
+
+      // Update the queued catch entry
+      const updated = await updateQueuedCatchEntry(editingEntry.id, partialData);
+
+      if (updated) {
+        // Optimistic UI update: refresh the queue to reflect changes
+        await refreshPendingQueue(currentUserIdRef.current);
+        closeEditDraft();
+        Alert.alert('Saved', 'Your draft has been updated.');
+      } else {
+        Alert.alert('Error', 'Failed to update the draft. The entry may have been removed.');
+      }
+    } catch (error) {
+      console.error('Error saving edit:', error);
+      Alert.alert('Error', 'An error occurred while saving your changes.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -209,25 +384,81 @@ export default function FeedScreen() {
     };
   }, []);
 
-  const handleLike = async (postId: string, hasLiked: boolean) => {
-    if (!currentUserId) return;
-    
-    setCatches(prev => prev.map(item => {
-      if (item.id === postId) {
-        return {
-          ...item,
-          has_liked: !hasLiked,
-          likes_count: hasLiked ? item.likes_count - 1 : item.likes_count + 1
-        };
-      }
-      return item;
+  /**
+   * Applies a change to one feed card through the row mirror, so state and the
+   * freshest-read ref move together. This is the single write path for
+   * optimistic interactions (like flips, comment counts).
+   */
+  const applyCatchUpdate = (postId: string, updater: (item: CatchItem) => CatchItem) => {
+    catchesRef.current = catchesRef.current.map((item) =>
+      item.id === postId ? updater(item) : item,
+    );
+    setCatches(catchesRef.current);
+  };
+
+  const performLikeToggle = async (postId: string) => {
+    const userId = currentUserIdRef.current;
+    if (!userId) {
+      Alert.alert('Sign in required', 'Sign in before reacting to catches.');
+      return;
+    }
+    const current = catchesRef.current.find((item) => item.id === postId);
+    if (!current) return;
+    const nextLiked = !current.has_liked;
+
+    // The optimistic flip happens first, unconditionally — the database write
+    // below is a background confirmation, never a gate on the UI.
+    applyCatchUpdate(postId, (item) => ({
+      ...item,
+      has_liked: nextLiked,
+      likes_count: Math.max(0, item.likes_count + (nextLiked ? 1 : -1)),
     }));
 
-    if (hasLiked) {
-      await supabase.from('post_likes').delete().eq('post_id', postId).eq('user_id', currentUserId);
-    } else {
-      await supabase.from('post_likes').insert({ post_id: postId, user_id: currentUserId });
+    try {
+      if (nextLiked) {
+        // Upsert rather than insert: a replayed tap after a lost response is
+        // deduplicated on the (post_id, user_id) primary key instead of
+        // surfacing a 23505 unique violation as a hard failure.
+        const { error } = await supabase
+          .from('post_likes')
+          .upsert(
+            { post_id: postId, user_id: userId },
+            { onConflict: 'post_id,user_id', ignoreDuplicates: true },
+          );
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('post_likes')
+          .delete()
+          .eq('post_id', postId)
+          .eq('user_id', userId);
+        if (error) throw error;
+      }
+    } catch (error: any) {
+      if (isNetworkError(error)) {
+        // Network dropped mid-toggle: keep the optimistic state and let the
+        // next foreground refresh reconcile it against the database. No dialog,
+        // no flicker — the interaction stays responsive through the outage.
+        console.warn('Like sync interrupted while offline; the feed will reconcile on refresh.');
+      } else {
+        // A definitive database rejection (RLS, constraint): quietly roll the
+        // card back so the UI never disagrees with what was actually stored.
+        console.error('Error syncing like:', error);
+        applyCatchUpdate(postId, (item) => ({
+          ...item,
+          has_liked: !nextLiked,
+          likes_count: Math.max(0, item.likes_count + (nextLiked ? -1 : 1)),
+        }));
+      }
     }
+  };
+
+  const toggleLike = (postId: string) => {
+    const previous = likeChainsRef.current.get(postId) ?? Promise.resolve();
+    const next = previous
+      .then(() => performLikeToggle(postId))
+      .catch((error) => console.error('Like toggle chain failed:', error));
+    likeChainsRef.current.set(postId, next);
   };
 
   const pickPhoto = async () => {
@@ -245,8 +476,24 @@ export default function FeedScreen() {
         quality: 0.8,
       });
       if (!result.canceled && result.assets[0]) {
-        animateLayout();
-        setPhotoUri(result.assets[0].uri);
+        const pickedUri = result.assets[0].uri;
+        // Optimize before the URI reaches anything else: the direct bucket
+        // upload and the offline queue both persist from photoUri, so bounding
+        // the resolution here shrinks every downstream path, and the re-encode
+        // strips GPS EXIF before the photo is even copied locally.
+        try {
+          const optimized = await optimizeCatchImage(pickedUri);
+          animateLayout();
+          setPhotoUri(optimized.uri);
+        } catch (optimizeError) {
+          // Fail closed on privacy: an unprocessed photo could still carry the
+          // spot's coordinates in its EXIF, so it must not be attached as-is.
+          console.error('Error optimizing catch photo:', optimizeError);
+          Alert.alert(
+            'Could not process photo',
+            'The photo could not be prepared for upload. Please try another photo.',
+          );
+        }
       }
     } catch (error) {
       console.error('Error picking photo:', error);
@@ -379,25 +626,133 @@ export default function FeedScreen() {
     }
   };
 
-  const submitComment = async () => {
-    if (!selectedPostId || !newComment.trim() || !currentUserId) return;
-    
-    const postId = selectedPostId;
-    const commentText = newComment.trim();
-    
+  /**
+   * Loads the comment history for the post the user tapped into. Network
+   * failures degrade quietly: the overlay still opens with a usable composer,
+   * the history just stays empty until a refresh.
+   */
+  const loadComments = async (postId: string) => {
+    setLoadingComments(true);
+    try {
+      const { data, error } = await supabase
+        .from('post_comments')
+        .select('id, text, created_at, profiles(username)')
+        .eq('post_id', postId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      setComments(
+        (data ?? []).map((row: any) => ({
+          id: row.id,
+          text: row.text,
+          created_at: row.created_at,
+          profiles: { username: row.profiles?.username ?? 'Anonymous Angler' },
+        })),
+      );
+    } catch (error: any) {
+      if (isNetworkError(error)) {
+        console.warn('Comment history unavailable while offline; the composer stays usable.');
+      } else {
+        console.error('Error loading comments:', error);
+      }
+      setComments([]);
+    } finally {
+      setLoadingComments(false);
+    }
+  };
+
+  const openComments = (postId: string) => {
+    animateLayout();
+    setSelectedPostId(postId);
     setNewComment('');
+    setComments([]);
+    setCommentModalVisible(true);
+    void loadComments(postId);
+  };
+
+  const closeComments = () => {
     animateLayout();
     setCommentModalVisible(false);
+    setSelectedPostId(null);
+    setComments([]);
+    setNewComment('');
+  };
 
-    setCatches(prev => prev.map(item => 
-      item.id === postId ? { ...item, comments_count: item.comments_count + 1 } : item
-    ));
+  /**
+   * Posts a comment with optimistic append: the text lands in the open list
+   * and the card's comment count ticks up immediately, while the database
+   * insert runs in the background. A network drop keeps the optimistic comment
+   * (flagged pending) for a later refresh to reconcile; a definitive database
+   * rejection quietly withdraws it and the count.
+   */
+  const submitComment = async () => {
+    const postId = selectedPostId;
+    const userId = currentUserIdRef.current;
+    const commentText = newComment.trim();
+    if (!postId || !commentText || !userId) return;
+    if (commentText.length > MAX_COMMENT_LENGTH) {
+      Alert.alert('Comment too long', 'Comments are limited to 1000 characters.');
+      return;
+    }
 
-    await supabase.from('post_comments').insert({
-      post_id: postId,
-      user_id: currentUserId,
-      text: commentText
-    });
+    setNewComment('');
+    animateLayout();
+
+    const optimisticId = `local-${Date.now()}`;
+    const optimisticComment: CommentItem = {
+      id: optimisticId,
+      text: commentText,
+      created_at: new Date().toISOString(),
+      profiles: { username: 'You' },
+      pending: true,
+    };
+    setComments((prev) => [...prev, optimisticComment]);
+    applyCatchUpdate(postId, (item) => ({
+      ...item,
+      comments_count: item.comments_count + 1,
+    }));
+
+    try {
+      const { data, error } = await supabase
+        .from('post_comments')
+        .insert({ post_id: postId, user_id: userId, text: commentText })
+        .select('id, text, created_at, profiles(username)')
+        .single();
+      if (error) throw error;
+      // Swap the placeholder for the committed row (real id + author handle).
+      // The row is cast explicitly: supabase-js types an embedded resource from
+      // a select string as an array (`{ username: any }[]`) even though the
+      // server returns a single object for this belongs-to join, so the direct
+      // cast doesn't sufficiently overlap. Assert through `unknown` and the
+      // runtime shape (one profile row) below.
+      const committedRow = data as unknown as {
+        id: string;
+        text: string;
+        created_at: string;
+        profiles: { username: string } | null;
+      } | null;
+      if (committedRow) {
+        const committed: CommentItem = {
+          id: committedRow.id,
+          text: committedRow.text,
+          created_at: committedRow.created_at,
+          profiles: { username: committedRow.profiles?.username ?? 'You' },
+        };
+        setComments((prev) => prev.map((c) => (c.id === optimisticId ? committed : c)));
+      }
+    } catch (error: any) {
+      if (isNetworkError(error)) {
+        // Offline: the optimistic comment stays (marked pending) and the next
+        // refresh reconciles it against the database.
+        console.warn('Comment sync interrupted while offline; it will reconcile on refresh.');
+      } else {
+        console.error('Error posting comment:', error);
+        setComments((prev) => prev.filter((c) => c.id !== optimisticId));
+        applyCatchUpdate(postId, (item) => ({
+          ...item,
+          comments_count: Math.max(0, item.comments_count - 1),
+        }));
+      }
+    }
   };
 
   const openAssistant = () => {
@@ -512,17 +867,30 @@ export default function FeedScreen() {
                         </Text>
                       </View>
                       {failedEntry ? (
-                        <TouchableOpacity
-                          style={styles.pendingDiscard}
-                          onPress={() => handleDiscardQueuedCatch(entry)}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Discard queued catch, ${entry.species}`}
-                          accessibilityHint="Removes this catch and its photo from this device"
-                        >
-                          <Ionicons name="trash-outline" size={13} color="#B91C1C" />
-                          <Text style={styles.pendingDiscardText}>Discard</Text>
-                        </TouchableOpacity>
+                        <View style={styles.pendingActionRow}>
+                          <TouchableOpacity
+                            style={styles.pendingEdit}
+                            onPress={() => openEditDraft(entry)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Edit draft: ${entry.species}`}
+                            accessibilityHint="Opens a form to modify this queued catch before it syncs"
+                          >
+                            <Ionicons name="pencil-outline" size={13} color="#2563EB" />
+                            <Text style={styles.pendingEditText}>Edit Draft</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.pendingDiscard}
+                            onPress={() => handleDiscardQueuedCatch(entry)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Discard queued catch, ${entry.species}`}
+                            accessibilityHint="Removes this catch and its photo from this device"
+                          >
+                            <Ionicons name="trash-outline" size={13} color="#B91C1C" />
+                            <Text style={styles.pendingDiscardText}>Discard</Text>
+                          </TouchableOpacity>
+                        </View>
                       ) : null}
                     </View>
                     <Text style={styles.title}>
@@ -543,18 +911,28 @@ export default function FeedScreen() {
             <Text style={styles.details}>🐟 {item.species} | 📍 {item.location_name}</Text>
             
             <View style={styles.socialBar}>
-              <TouchableOpacity onPress={() => handleLike(item.id, item.has_liked)} style={styles.socialButton}>
-                <Ionicons 
-                  name={item.has_liked ? "heart" : "heart-outline"} 
-                  size={22} 
-                  color={item.has_liked ? "#ef4444" : "#64748b"} 
+              <TouchableOpacity
+                onPress={() => toggleLike(item.id)}
+                style={styles.socialButton}
+                accessibilityRole="button"
+                accessibilityLabel={`${item.has_liked ? 'Unlike' : 'Like'} catch by ${item.profiles.username}`}
+                accessibilityHint="Toggles your like on this catch"
+                accessibilityState={{ selected: item.has_liked }}
+              >
+                <Ionicons
+                  name={item.has_liked ? 'heart' : 'heart-outline'}
+                  size={22}
+                  color={item.has_liked ? '#ef4444' : '#64748b'}
                 />
                 <Text style={styles.socialText}>{item.likes_count}</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
-                onPress={() => { animateLayout(); setSelectedPostId(item.id); setCommentModalVisible(true); }} 
+              <TouchableOpacity
+                onPress={() => openComments(item.id)}
                 style={styles.socialButton}
+                accessibilityRole="button"
+                accessibilityLabel={`Open comments on catch by ${item.profiles.username}`}
+                accessibilityHint="Opens the comment list for this catch"
               >
                 <Ionicons name="chatbubble-outline" size={20} color="#64748b" />
                 <Text style={styles.socialText}>{item.comments_count}</Text>
@@ -562,25 +940,73 @@ export default function FeedScreen() {
             </View>
           </View>
         )}
+        onEndReached={loadMoreCatches}
+        onEndReachedThreshold={0.2}
+        ListFooterComponent={
+          loadingMore ? (
+            <View style={styles.footerSpinner}>
+              <ActivityIndicator size="small" color="#0284c7" />
+              <Text style={styles.footerSpinnerText}>Loading more catches…</Text>
+            </View>
+          ) : !hasMore && catches.length > 0 ? (
+            <Text style={styles.endOfFeed}>You're all caught up 🎣</Text>
+          ) : null
+        }
       />
 
-      <Modal visible={commentModalVisible} animationType="slide" transparent={true}>
+      {/* Contextual comment overlay: the tapped post's list + composer */}
+      <Modal
+        visible={commentModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={closeComments}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Leave a Comment</Text>
+            <Text style={styles.modalTitle}>Comments</Text>
+            {loadingComments ? (
+              <View style={styles.commentLoading}>
+                <ActivityIndicator size="small" color="#0284c7" />
+              </View>
+            ) : comments.length === 0 ? (
+              <Text style={styles.commentEmpty}>
+                No comments yet — be the first to say something.
+              </Text>
+            ) : (
+              <FlatList
+                data={comments}
+                keyExtractor={(comment) => comment.id}
+                style={styles.commentList}
+                renderItem={({ item: comment }) => (
+                  <View style={[styles.commentRow, comment.pending && styles.commentPending]}>
+                    <Text style={styles.commentUsername}>@{comment.profiles.username}</Text>
+                    <Text style={styles.commentText}>{comment.text}</Text>
+                    <Text style={styles.commentTime}>{formatCommentTime(comment.created_at)}</Text>
+                  </View>
+                )}
+              />
+            )}
             <TextInput
               style={styles.input}
               placeholder="Type your fishing comment..."
               value={newComment}
               onChangeText={setNewComment}
               multiline
+              maxLength={MAX_COMMENT_LENGTH}
             />
             <View style={styles.modalButtons}>
-              <TouchableOpacity onPress={() => { animateLayout(); setCommentModalVisible(false); }} style={styles.cancelBtn}>
+              <TouchableOpacity onPress={closeComments} style={styles.cancelBtn}>
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={submitComment} style={styles.submitBtn}>
-                <Text style={styles.submitText}>Submit</Text>
+              <TouchableOpacity
+                onPress={submitComment}
+                style={[styles.submitBtn, (!newComment.trim() || !currentUserId) && styles.submitBtnDisabled]}
+                disabled={!newComment.trim() || !currentUserId}
+                accessibilityRole="button"
+                accessibilityLabel="Post comment"
+                accessibilityState={{ disabled: !newComment.trim() || !currentUserId }}
+              >
+                <Text style={styles.submitText}>Post</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -692,6 +1118,92 @@ export default function FeedScreen() {
     </View>
   </View>
 </Modal>
+
+{/* Edit Draft Modal — for modifying failed/queued catch entries */}
+{editingEntry && (
+  <Modal animationType="slide" transparent={true} visible={true} onRequestClose={closeEditDraft}>
+    <View style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)', justifyContent: 'flex-end' }}>
+      <View style={{ backgroundColor: '#ffffff', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 24, paddingTop: 20, paddingBottom: 40, shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 10 }}>
+        
+        {/* Drag Indicator / Header */}
+        <View style={{ width: 40, height: 5, backgroundColor: '#E5E5EA', borderRadius: 3, alignSelf: 'center', marginBottom: 20 }} />
+        <Text style={{ fontSize: 22, fontWeight: '700', color: '#1C1C1E', marginBottom: 20, textAlign: 'center' }}>✏️ Edit Draft</Text>
+        
+        {/* Form Fields Section */}
+        <View style={{ gap: 14, marginBottom: 24 }}>
+          <View>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: '#8E8E93', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Fish Species</Text>
+            <TextInput style={{ backgroundColor: '#F2F2F7', borderRadius: 12, padding: 14, fontSize: 16, color: '#1C1C1E' }} placeholder="e.g., Dusky Flathead" placeholderTextColor="#AEAEB2" value={editSpecies} onChangeText={setEditSpecies} />
+          </View>
+
+          <View>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: '#8E8E93', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Length (cm)</Text>
+            <TextInput style={{ backgroundColor: '#F2F2F7', borderRadius: 12, padding: 14, fontSize: 16, color: '#1C1C1E' }} placeholder="e.g., 45" placeholderTextColor="#AEAEB2" keyboardType="numeric" value={editLength} onChangeText={setEditLength} />
+          </View>
+
+          {/* Photo Section */}
+          <View style={{ gap: 12 }}>
+            <TouchableOpacity
+              style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: editPhotoUri ? '#E3F2FD' : '#F2F2F7', padding: 14, borderRadius: 12, borderStyle: editPhotoUri ? 'solid' : 'dashed', borderWidth: 1, borderColor: editPhotoUri ? '#007AFF' : '#C7C7CC' }}
+              onPress={async () => {
+                try {
+                  const result = await ImagePicker.launchImageLibraryAsync({
+                    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                    quality: 0.7,
+                  });
+                  if (!result.canceled && result.assets && result.assets[0]) {
+                    // Optimize and copy the image to a local file
+                    const optimized = await optimizeCatchImage(result.assets[0].uri);
+                    setEditPhotoUri(optimized.uri);
+                  }
+                } catch (error) {
+                  console.error('Error picking photo:', error);
+                }
+              }}
+              disabled={isSavingEdit}
+            >
+              <Text style={{ fontSize: 15, fontWeight: '600', color: '#007AFF' }}>
+                {isSavingEdit ? '⏳ Saving...' : editPhotoUri ? '🖼️ Photo Added' : '📸 Add/Change Photo'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          
+          {editPhotoUri && (
+            <View style={{ marginTop: 8, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: '#C7C7CC', position: 'relative' }}>
+              <Image source={{ uri: editPhotoUri }} style={{ width: '100%', height: 160 }} resizeMode="cover" />
+              <TouchableOpacity
+                onPress={() => setEditPhotoUri(null)}
+                disabled={isSavingEdit}
+                style={{ position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 16, width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* Action Buttons */}
+        <View style={{ gap: 10 }}>
+          <TouchableOpacity
+            style={{ backgroundColor: isSavingEdit ? '#8E8E93' : '#007AFF', padding: 16, borderRadius: 14, alignItems: 'center', shadowColor: '#007AFF', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 3 }}
+            onPress={saveEditDraft}
+            disabled={isSavingEdit}
+          >
+            <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '600' }}>
+              {isSavingEdit ? 'Saving...' : 'Save Changes'}
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity style={{ padding: 16, borderRadius: 14, alignItems: 'center' }} onPress={closeEditDraft} disabled={isSavingEdit}>
+            <Text style={{ color: '#8E8E93', fontSize: 16, fontWeight: '500' }}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+
+      </View>
+    </View>
+  </Modal>
+)}
+
       {/* Ask Tidewire guide modal */}
       <Modal visible={assistantVisible} animationType="slide" transparent={true} onRequestClose={closeAssistant}>
         <View style={styles.modalOverlay}>
@@ -779,8 +1291,23 @@ const styles = StyleSheet.create({
   pendingBadgeGroup: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   pendingDiscard: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
   pendingDiscardText: { fontSize: 11, fontWeight: '700', color: '#B91C1C' },
+  pendingEdit: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#BFDBFE', backgroundColor: '#EFF6FF' },
+  pendingEditText: { fontSize: 11, fontWeight: '700', color: '#2563EB' },
+  pendingActionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   pendingBadge: { fontSize: 11, fontWeight: '700', color: '#B45309', letterSpacing: 0.5 },
   pendingBadgeAlert: { color: '#B91C1C' },
   fab: { position: 'absolute', bottom: 20, right: 20, backgroundColor: '#007AFF', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', elevation: 5 },
-  fabText: { color: '#fff', fontSize: 28, fontWeight: 'bold' }
+  fabText: { color: '#fff', fontSize: 28, fontWeight: 'bold' },
+  footerSpinner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 18 },
+  footerSpinnerText: { color: '#64748b', fontSize: 13, fontWeight: '600' },
+  endOfFeed: { textAlign: 'center', color: '#94a3b8', fontSize: 13, fontWeight: '600', paddingVertical: 18 },
+  commentList: { maxHeight: 300, marginBottom: 12 },
+  commentRow: { paddingVertical: 8, borderBottomWidth: 1, borderColor: '#f1f5f9' },
+  commentUsername: { fontWeight: '700', color: '#0284c7', fontSize: 13, marginBottom: 2 },
+  commentText: { color: '#0f172a', fontSize: 14, lineHeight: 19 },
+  commentTime: { color: '#94a3b8', fontSize: 11, marginTop: 2 },
+  commentPending: { opacity: 0.55 },
+  commentLoading: { alignItems: 'center', paddingVertical: 20 },
+  commentEmpty: { color: '#64748b', fontSize: 14, paddingVertical: 12, textAlign: 'center' },
+  submitBtnDisabled: { backgroundColor: '#94a3b8' },
 });

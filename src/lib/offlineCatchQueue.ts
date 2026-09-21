@@ -1,5 +1,6 @@
 import { File, Directory, Paths } from 'expo-file-system';
 import { supabase } from './supabase';
+import { traceStorageOperation } from './perfMonitor';
 
 // Offline catch queue: when a log submission fails with a network error out
 // on the water, the payload (+ persistent photo copy) is saved and synced
@@ -154,7 +155,7 @@ function getStorage(): StorageLike {
 // same queue and insert the same catch, and a racing enqueue can be dropped.
 let queueLock: Promise<unknown> = Promise.resolve();
 
-function withQueueLock<T>(task: () => Promise<T>): Promise<T> {
+export function withQueueLock<T>(task: () => Promise<T>): Promise<T> {
   // Chain onto the previous task regardless of whether it settled or rejected,
   // so a single failure can never wedge the lock for every later caller.
   const result = queueLock.then(task, task);
@@ -247,7 +248,18 @@ function parseQueue(raw: string | null): QueuedCatch[] {
 // function from inside a locked section would deadlock against its own chain.
 async function readQueue(): Promise<QueuedCatch[]> {
   try {
-    return parseQueue(await getStorage().getItem(QUEUE_KEY));
+    // Both storage phases are traced so the diagnostics card sees the real
+    // cost of a large queue payload: the raw I/O read, then the parse (which
+    // is where the string-salvaging recovery runs) weighted by payload bytes.
+    const raw = await traceStorageOperation(
+      'offlineCatchQueue.read',
+      () => getStorage().getItem(QUEUE_KEY),
+    );
+    return await traceStorageOperation(
+      'offlineCatchQueue.parseQueue',
+      () => parseQueue(raw),
+      raw?.length,
+    );
   } catch (error) {
     console.error('Error loading offline catch queue:', error);
     return [];
@@ -256,7 +268,14 @@ async function readQueue(): Promise<QueuedCatch[]> {
 
 async function writeQueue(queue: QueuedCatch[]): Promise<void> {
   try {
-    await getStorage().setItem(QUEUE_KEY, JSON.stringify(queue));
+    // Serialise outside the tracer so the sample records exactly the storage
+    // write duration, with the payload's byte weight attached.
+    const payload = JSON.stringify(queue);
+    await traceStorageOperation(
+      'offlineCatchQueue.write',
+      () => getStorage().setItem(QUEUE_KEY, payload),
+      payload.length,
+    );
   } catch (error) {
     console.error('Error saving offline catch queue (non-blocking):', error);
   }
@@ -371,6 +390,8 @@ export function discardQueuedCatch(id: string): Promise<boolean> {
 // Callers must already hold the lock (syncQueue and enqueueCatch do). They go
 // through readQueue/writeQueue rather than the public API so they cannot
 // re-enter the lock their caller holds, which would deadlock.
+
+export { readQueue, writeQueue };
 
 async function removeFromQueue(id: string): Promise<void> {
   const queue = await readQueue();
