@@ -118,7 +118,7 @@ module.exports = {
     extra: {
       router: {},
       eas: {
-        projectId: 'aa4a0e1c-109c-42e3-a5e6-4426f78f69f5',
+        projectId: 'c580288a-1474-4959-a15f-ca365b3b4228',
       },
     },
     owner: 'wiretidetest01',
