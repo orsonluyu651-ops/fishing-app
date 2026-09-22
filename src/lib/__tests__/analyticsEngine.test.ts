@@ -1,4 +1,9 @@
-import { processAnglerCatchAnalytics } from '../analyticsEngine';
+import {
+  generateFeedingIndex,
+  getHistoricalAnalytics,
+  processAnglerCatchAnalytics,
+  type RawCatchRecord,
+} from '../analyticsEngine';
 import { CatchRecord } from '../exportEngine';
 
 describe('Angler Profile Performance Analytics Engine', () => {
@@ -71,5 +76,50 @@ describe('Angler Profile Performance Analytics Engine', () => {
     const analysis = processAnglerCatchAnalytics(data);
     // Tie — whichever iterates first wins; assert it is one of the two
     expect(['River A', 'River B']).toContain(analysis.favoriteLocation);
+  });
+});
+
+describe('Solunar-bound feeding index matrix (Phase 3)', () => {
+  const phaseDataset: RawCatchRecord[] = [
+    { id: 'a', species: 'Bream', length: null, weight: null, captured_at: '2024-01-11T12:00:00Z', user_id: 'u1', spot_id: null },
+    { id: 'b', species: 'Bream', length: null, weight: null, captured_at: '2024-01-25T12:00:00Z', user_id: 'u1', spot_id: null },
+    { id: 'c', species: 'Flathead', length: null, weight: null, captured_at: '2024-01-25T18:00:00Z', user_id: 'u1', spot_id: null },
+  ];
+
+  it('binds catches to the correct solunar lunar phases synchronously', () => {
+    const matrix = generateFeedingIndex(phaseDataset);
+    expect(matrix).toHaveLength(8);
+    const newMoon = matrix.find((row) => row.phase === 'new_moon')!;
+    const fullMoon = matrix.find((row) => row.phase === 'full_moon')!;
+    expect(newMoon.catchCount).toBe(1);
+    expect(newMoon.feedingIndex).toBe(50);
+    expect(fullMoon.catchCount).toBe(2);
+    expect(fullMoon.feedingIndex).toBe(100);
+    expect(fullMoon.phaseLabel).toBe('Full Moon');
+    expect(matrix.reduce((sum, row) => sum + row.catchCount, 0)).toBe(3);
+  });
+
+  it('degrades to a zeroed eight-row matrix for empty or null datasets', () => {
+    const empty = generateFeedingIndex([]);
+    expect(empty).toHaveLength(8);
+    expect(empty.every((row) => row.catchCount === 0 && row.feedingIndex === 0 && row.percentage === 0)).toBe(true);
+    expect(generateFeedingIndex(null as unknown as RawCatchRecord[])).toHaveLength(8);
+    expect(generateFeedingIndex(undefined as unknown as RawCatchRecord[])).toHaveLength(8);
+  });
+
+  it('extends the historical pipeline with the solunar feeding matrix', () => {
+    const analytics = getHistoricalAnalytics(phaseDataset);
+    expect(analytics.totalCatches).toBe(3);
+    expect(analytics.feedingIndexMatrix).toHaveLength(8);
+    expect(analytics.peakFeedingPhase).toBe('full_moon');
+    expect(analytics.speciesBreakdown.length).toBeGreaterThan(0);
+    expect(analytics.moonPhaseDistribution.length).toBeGreaterThan(0);
+  });
+
+  it('returns a null-peak empty compilation for invalid datasets', () => {
+    const analytics = getHistoricalAnalytics(null as unknown as RawCatchRecord[]);
+    expect(analytics.totalCatches).toBe(0);
+    expect(analytics.feedingIndexMatrix).toHaveLength(8);
+    expect(analytics.peakFeedingPhase).toBeNull();
   });
 });

@@ -1,5 +1,15 @@
-import { clusterMarkersByGrid, computeSpatialClusters, isClusterNode } from '../mapClusterEngine';
-import type { GeoPoint, MapCluster, SpatialBoundingBox } from '../mapClusterEngine';
+import {
+  clusterMarkersByGrid,
+  computeSpatialClusters,
+  createQuadtree,
+  insert,
+  isClusterNode,
+  isQuadtreeLeaf,
+  QUADTREE_MAX_DEPTH,
+  QUADTREE_NODE_CAPACITY,
+  queryViewport,
+} from '../mapClusterEngine';
+import type { GeoPoint, MapCluster, QuadtreeNode, SpatialBoundingBox } from '../mapClusterEngine';
 import { SavedSpotMarker } from '../mapSpotEngine';
 
 const WORLD_BOX: SpatialBoundingBox = [-180, -90, 180, 90];
@@ -132,5 +142,135 @@ describe('computeSpatialClusters (bounding-box + zoom reduction)', () => {
     expect(computeSpatialClusters([], WORLD_BOX, 8)).toEqual([]);
     expect(computeSpatialClusters(null as unknown as GeoPoint[], WORLD_BOX, 8)).toEqual([]);
     expect(computeSpatialClusters(trio, null as unknown as SpatialBoundingBox, 8)).toEqual([]);
+  });
+});
+
+describe('Quadtree spatial index (Phase 2)', () => {
+  const BOX: SpatialBoundingBox = [153.3, -28.1, 153.6, -27.8];
+
+  const point = (id: string, latitude: number, longitude: number): GeoPoint => ({
+    id,
+    latitude,
+    longitude,
+    species: 'Bream',
+  });
+
+  it('createQuadtree copies the bounds tuple and starts as a derived leaf', () => {
+    const box: SpatialBoundingBox = [0, 0, 10, 10];
+    const root = createQuadtree(box);
+    box[0] = 999; // caller-side mutation must never corrupt the index
+    expect(root.bounds).toEqual([0, 0, 10, 10]);
+    expect(root.depth).toBe(0);
+    expect(root.points).toEqual([]);
+    expect(root.children).toBeNull();
+    expect(isQuadtreeLeaf(root)).toBe(true);
+  });
+
+  it('holds up to node capacity in the root leaf without splitting', () => {
+    const root = createQuadtree(BOX);
+    for (let i = 0; i < QUADTREE_NODE_CAPACITY; i += 1) {
+      insert(root, point(`p${i}`, -28.05 + i * 0.005, 153.35 + i * 0.005));
+    }
+    expect(isQuadtreeLeaf(root)).toBe(true);
+    expect(root.points).toHaveLength(QUADTREE_NODE_CAPACITY);
+  });
+
+  it('splits into four quadrant children once capacity is exceeded', () => {
+    const root = createQuadtree(BOX);
+    for (let i = 0; i <= QUADTREE_NODE_CAPACITY; i += 1) {
+      insert(root, point(`p${i}`, -28.0 + i * 0.01, 153.35 + i * 0.01));
+    }
+    expect(root.children).not.toBeNull();
+    expect(root.children).toHaveLength(4);
+    expect(root.points).toHaveLength(0); // interior nodes carry no payload
+    expect(root.children!.every(isQuadtreeLeaf)).toBe(true);
+    expect(root.children!.every((child) => child.depth === 1)).toBe(true);
+  });
+
+  it('queryViewport returns exactly the points inside the box and none outside', () => {
+    const root = createQuadtree(BOX);
+    const pts = [
+      point('in-a', -27.9, 153.4),
+      point('in-b', -28.0, 153.5),
+      point('out-c', -29.5, 150.0), // outside the root box entirely
+      point('in-d', -27.85, 153.55),
+    ];
+    for (const p of pts) insert(root, p);
+    const out = queryViewport(root, BOX);
+    expect(out.map((p) => p.id).sort()).toEqual(['in-a', 'in-b', 'in-d']);
+  });
+
+  it('short-circuits viewports that do not intersect the indexed bounds', () => {
+    const root = createQuadtree(BOX);
+    insert(root, point('a', -27.9, 153.4));
+    expect(queryViewport(root, [0, 0, 1, 1])).toEqual([]);
+    expect(queryViewport(root, [150, -30, 151, -29])).toEqual([]);
+  });
+
+  it('includes points sitting exactly on the viewport boundary (inclusive edges)', () => {
+    const root = createQuadtree(BOX);
+    insert(root, point('corner', -28.1, 153.3)); // exact min corner of BOX
+    insert(root, point('edge', -27.8, 153.45)); // exact max-lat edge midpoint
+    const out = queryViewport(root, BOX);
+    expect(out.map((p) => p.id).sort()).toEqual(['corner', 'edge']);
+  });
+
+  it('routes midline points deterministically regardless of insertion order', () => {
+    const forward = createQuadtree([0, 0, 10, 10]);
+    const reverse = createQuadtree([0, 0, 10, 10]);
+    const pts = [
+      point('m-center', 5, 5), // exactly on both midlines
+      point('m-east', 2, 5), // exactly on the lng midline
+      point('m-north', 5, 2), // exactly on the lat midline
+      point('c0', 1, 1),
+      point('c1', 1, 2),
+      point('c2', 2, 1),
+      point('c3', 8, 8),
+      point('c4', 9, 9),
+      point('c5', 8, 9),
+      point('c6', 9, 8),
+      point('corner-max', 10, 10),
+    ];
+    for (const p of pts) insert(forward, p);
+    for (const p of [...pts].reverse()) insert(reverse, p);
+
+    const ids = (tree: QuadtreeNode) =>
+      queryViewport(tree, [0, 0, 10, 10]).map((p) => p.id).sort();
+    expect(ids(forward)).toEqual(ids(reverse));
+    expect(ids(forward)).toEqual(
+      expect.arrayContaining(['m-center', 'm-east', 'm-north', 'corner-max']),
+    );
+    expect(ids(forward)).toHaveLength(pts.length);
+  });
+
+  it('absorbs identical-coordinate pileups at max depth without recursing forever', () => {
+    const root = createQuadtree([0, 0, 10, 10]);
+    for (let i = 0; i < 200; i += 1) insert(root, point(`dup-${i}`, 5, 5));
+
+    expect(queryViewport(root, [0, 0, 10, 10])).toHaveLength(200);
+
+    // The deepest node must respect the hard depth cap.
+    let deepest: QuadtreeNode = root;
+    while (deepest.children) deepest = deepest.children[0]!;
+    expect(deepest.depth).toBeLessThanOrEqual(QUADTREE_MAX_DEPTH);
+  });
+
+  it('silently skips points outside the root box and non-finite coordinates', () => {
+    const root = createQuadtree(BOX);
+    expect(() => {
+      insert(root, point('north', 40, 153.4)); // outside root lat range
+      insert(root, point('nan', Number.NaN, 153.4));
+      insert(root, point('inf', -27.9, Number.POSITIVE_INFINITY));
+    }).not.toThrow();
+    expect(root.points).toHaveLength(0);
+    expect(queryViewport(root, BOX)).toEqual([]);
+  });
+
+  it('is defensive against null nodes, points, and malformed viewports', () => {
+    const root = createQuadtree(BOX);
+    expect(() => insert(null as unknown as QuadtreeNode, point('x', -27.9, 153.4))).not.toThrow();
+    expect(() => insert(root, null as unknown as GeoPoint)).not.toThrow();
+    expect(queryViewport(null as unknown as QuadtreeNode, BOX)).toEqual([]);
+    expect(queryViewport(root, [1, 2] as unknown as SpatialBoundingBox)).toEqual([]);
   });
 });

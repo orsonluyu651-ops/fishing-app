@@ -99,8 +99,12 @@ export interface SolunarForecast {
   overallActivityRating: SolunarActivityRating;
 }
 
-const SYNODIC_MONTH_DAYS = 29.530588853;
-const KNOWN_NEW_MOON_UTC_MS = Date.UTC(2000, 0, 6, 18, 14, 0); // 2000-01-06 18:14 UTC
+/** Mean synodic month in days — the J2000-anchored lunar phase constant. */
+export const SYNODIC_MONTH = 29.530588853;
+
+/** UTC milliseconds of the J2000 reference new moon: 2000-01-06 18:14 UT. */
+export const J2000_NEW_MOON_EPOCH_MS = Date.UTC(2000, 0, 6, 18, 14, 0);
+
 const MS_PER_DAY = 86_400_000;
 const LUNAR_DAY_HOURS = 24.8412; // mean interval between successive moon transits
 
@@ -130,19 +134,19 @@ function safeTargetDate(targetDate: Date): Date {
   return new Date();
 }
 
-/** Fractional lunar age in days [0, SYNODIC_MONTH_DAYS). */
+/** Fractional lunar age in days [0, SYNODIC_MONTH). */
 function lunarAgeDays(date: Date): number {
-  const elapsed = (date.getTime() - KNOWN_NEW_MOON_UTC_MS) / MS_PER_DAY;
-  return ((elapsed % SYNODIC_MONTH_DAYS) + SYNODIC_MONTH_DAYS) % SYNODIC_MONTH_DAYS;
+  const elapsed = (date.getTime() - J2000_NEW_MOON_EPOCH_MS) / MS_PER_DAY;
+  return ((elapsed % SYNODIC_MONTH) + SYNODIC_MONTH) % SYNODIC_MONTH;
 }
 
 /** Phase angle 0..2π from lunar age (0 = new, π = full). */
 function phaseAngle(ageDays: number): number {
-  return (ageDays / SYNODIC_MONTH_DAYS) * 2 * Math.PI;
+  return (ageDays / SYNODIC_MONTH) * 2 * Math.PI;
 }
 
 function lunarPhaseName(ageDays: number): string {
-  const index = Math.floor(((ageDays / SYNODIC_MONTH_DAYS) * 8 + 0.5)) % 8;
+  const index = Math.floor(((ageDays / SYNODIC_MONTH) * 8 + 0.5)) % 8;
   return LUNAR_PHASE_NAMES[index]!;
 }
 
@@ -192,17 +196,15 @@ export async function generateSolunarForecast(
   const angle = phaseAngle(age);
   const illuminationPercentage = Math.round(((1 - Math.cos(angle)) / 2) * 100);
 
-  // Local lunar transit: base UTC transit drifts with the lunar day cycle
-  // and shifts 4 minutes per degree of longitude (east earlier).
+  // Transit engine (shared with buildSolunarDayForecast — single source of
+  // transit truth): longitude shifts 4 min/degree, lunar day 24.8412 h.
   // (Latitude shapes solar elevation only — lunar phase math is longitude-bound.)
-  const transitUTC = ((12 + (age / SYNODIC_MONTH_DAYS) * LUNAR_DAY_HOURS - lng / 15) % 24 + 24) % 24;
-  const nadirUTC = (transitUTC + LUNAR_DAY_HOURS / 2) % 24;
-  const moonriseUTC = (transitUTC - 6.2 + 24) % 24;
-  const moonsetUTC = (transitUTC + 6.2) % 24;
+  const { upperTransitUTC, lowerTransitUTC, moonriseUTC, moonsetUTC } =
+    computeLunarTransitOffsets(date, lng);
 
   const majorStrikeWindows = [
-    formatWindow(date, transitUTC, 1),
-    formatWindow(date, nadirUTC, 1),
+    formatWindow(date, upperTransitUTC, 1),
+    formatWindow(date, lowerTransitUTC, 1),
   ];
   const minorStrikeWindows = [
     formatWindow(date, moonriseUTC, 0.5),
@@ -218,5 +220,163 @@ export async function generateSolunarForecast(
     majorStrikeWindows,
     minorStrikeWindows,
     overallActivityRating,
+  };
+}
+
+// ── Synodic moon tracker, transit engine & window calculator (Phase 3)
+// Offline prediction matrix: pure O(1) trig, zero dependencies, UI-thread
+// safe. buildSolunarDayForecast composes the tracker + transit engine into
+// the structured daily profile consumed by charts and offline packs.
+
+/** Latitude beyond which rise/set approximations degrade (polar circles). */
+export const SOLUNAR_POLAR_LATITUDE_DEGREES = 66.5633;
+
+/** Synodic moon tracker snapshot for one epoch timestamp. */
+export interface SynodicMoonState {
+  /** Fractional lunar age in days, [0, SYNODIC_MONTH). */
+  ageDays: number;
+  /** Normalized phase progress, [0, 1): 0 new → 0.5 full → 1 new. */
+  phaseFraction: number;
+  /** Phase angle in radians, [0, 2π): 0 = new, π = full. */
+  phaseAngleRadians: number;
+  /** Illuminated fraction of the lunar disk, 0–100 (rounded). */
+  illumination: number;
+  /** Qualitative 8-bucket phase name. */
+  phaseName: string;
+  /** True while the disk grows (new → full). */
+  waxing: boolean;
+}
+
+/**
+ * Synodic moon tracker: exact lunar illumination and current phase for a
+ * given epoch timestamp, anchored to the J2000 reference new moon
+ * ({@link J2000_NEW_MOON_EPOCH_MS}) and the mean synodic month
+ * ({@link SYNODIC_MONTH}).
+ * @param timestamp Epoch instant (`Date` or milliseconds since the Unix epoch). Invalid inputs fall back to the Unix epoch.
+ * @returns Deterministic lunar state snapshot.
+ * @complexity O(1); no I/O.
+ */
+export function getSynodicMoonState(timestamp: Date | number): SynodicMoonState {
+  const ms = timestamp instanceof Date ? timestamp.getTime() : timestamp;
+  const instant = Number.isFinite(ms) ? new Date(ms) : new Date(0);
+  const age = lunarAgeDays(instant);
+  const angle = phaseAngle(age);
+  const fraction = age / SYNODIC_MONTH;
+  return {
+    ageDays: age,
+    phaseFraction: fraction,
+    phaseAngleRadians: angle,
+    illumination: Math.round(((1 - Math.cos(angle)) / 2) * 100),
+    phaseName: lunarPhaseName(age),
+    waxing: fraction < 0.5,
+  };
+}
+
+/** Local lunar transit offsets in UTC hours ([0, 24)) for one observer/date. */
+export interface LunarTransitOffsets {
+  /** Upper transit (moon at/nearest the local zenith). */
+  upperTransitUTC: number;
+  /** Lower transit (anti-zenith), half a lunar day after the upper. */
+  lowerTransitUTC: number;
+  /** Approximated moonrise, ~6.2 h before upper transit. */
+  moonriseUTC: number;
+  /** Approximated moonset, ~6.2 h after upper transit. */
+  moonsetUTC: number;
+}
+
+/**
+ * Transit engine: upper/lower lunar transit and rise/set offsets for an
+ * observer longitude. The base UTC transit drifts with the 24.8412 h lunar
+ * day and shifts 4 minutes per degree of longitude (east earlier).
+ * @param targetDate Forecast instant; invalid values fall back to now.
+ * @param longitude Observer longitude; non-finite values fall back to `0`, valid values wrap to `[-180, 180)`.
+ * @returns Deterministic UTC-hour offsets, each in `[0, 24)`.
+ * @complexity O(1); no I/O.
+ */
+export function computeLunarTransitOffsets(targetDate: Date, longitude: number): LunarTransitOffsets {
+  const date = safeTargetDate(targetDate);
+  const lng = wrapLongitude(longitude);
+  const age = lunarAgeDays(date);
+
+  const upperTransitUTC = ((12 + (age / SYNODIC_MONTH) * LUNAR_DAY_HOURS - lng / 15) % 24 + 24) % 24;
+  const lowerTransitUTC = (upperTransitUTC + LUNAR_DAY_HOURS / 2) % 24;
+  const moonriseUTC = (upperTransitUTC - 6.2 + 24) % 24;
+  const moonsetUTC = (upperTransitUTC + 6.2) % 24;
+
+  return { upperTransitUTC, lowerTransitUTC, moonriseUTC, moonsetUTC };
+}
+
+/** Structured daily solunar profile for the offline prediction matrix. */
+export interface SolunarDayForecast {
+  /** UTC midnight ISO instant of the forecast day. */
+  date: string;
+  /** Qualitative 8-bucket lunar phase name. */
+  lunarPhase: string;
+  /** Illuminated disk fraction, 0–100. */
+  illumination: number;
+  /** Legacy gravitational feeding score, 10–100. */
+  feedingIndex: number;
+  /** Two 2 h windows centered on the upper/lower lunar transits. */
+  majorWindows: SolunarStrikeWindow[];
+  /** Two 1 h windows centered on rise/set (or fallback offsets). */
+  minorWindows: SolunarStrikeWindow[];
+  /** Qualitative overall rating. */
+  rating: SolunarActivityRating;
+  /** True when |latitude| exceeded the polar-circle fallback bound. */
+  latitudeFallbackApplied: boolean;
+}
+
+/**
+ * Window calculator: composes the synodic tracker and transit engine into a
+ * structured {@link SolunarDayForecast} — major 2 h feeding windows centered
+ * on the transits, minor 1 h windows centered on rise/set events. Extreme
+ * high/low latitudes (|lat| > {@link SOLUNAR_POLAR_LATITUDE_DEGREES}) switch
+ * the minor windows to quarter-lunar-day fallback offsets, because
+ * horizon-grazing moons make rise/set approximations degenerate.
+ * @param latitude Observer latitude; non-finite values fall back to `0`, valid values clamp to `[-90, 90]`.
+ * @param longitude Observer longitude; non-finite values fall back to `0`, valid values wrap to `[-180, 180)`.
+ * @param targetDate Forecast day; invalid values fall back to now.
+ * @returns Deterministic daily profile.
+ * @complexity O(1); no I/O, catch-log iteration, or external API calls.
+ */
+export function buildSolunarDayForecast(
+  latitude: number,
+  longitude: number,
+  targetDate: Date,
+): SolunarDayForecast {
+  const lat = clampLatitude(latitude);
+  const lng = wrapLongitude(longitude);
+  const date = safeTargetDate(targetDate);
+
+  const moon = getSynodicMoonState(date);
+  const transits = computeLunarTransitOffsets(date, lng);
+  const latitudeFallbackApplied = Math.abs(lat) > SOLUNAR_POLAR_LATITUDE_DEGREES;
+
+  // Fallback: quarter-lunar-day offsets from upper transit keep the minor
+  // windows well-defined when rise/set events degenerate near the poles.
+  const minorCenters = latitudeFallbackApplied
+    ? [
+        (transits.upperTransitUTC + LUNAR_DAY_HOURS / 4) % 24,
+        (transits.upperTransitUTC + (3 * LUNAR_DAY_HOURS) / 4) % 24,
+      ]
+    : [transits.moonriseUTC, transits.moonsetUTC];
+
+  const legacy = calculateSolunarWindows(date, lat, lng);
+
+  return {
+    date: new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())).toISOString(),
+    lunarPhase: moon.phaseName,
+    illumination: moon.illumination,
+    feedingIndex: legacy.feedingScore,
+    majorWindows: [
+      formatWindow(date, transits.upperTransitUTC, 1),
+      formatWindow(date, transits.lowerTransitUTC, 1),
+    ],
+    minorWindows: [
+      formatWindow(date, minorCenters[0]!, 0.5),
+      formatWindow(date, minorCenters[1]!, 0.5),
+    ],
+    rating: ratingFor(legacy.feedingScore, moon.illumination),
+    latitudeFallbackApplied,
   };
 }

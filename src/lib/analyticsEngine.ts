@@ -6,6 +6,8 @@
  * and monthly catch velocity curves.
  */
 
+import { getSynodicMoonState } from './solunarEngine';
+
 /**
  * Raw catch record from the database.
  */
@@ -52,25 +54,27 @@ const MONTH_LABELS = [
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
 ];
 
+/** Maps solunar tracker phase names onto the analytics phase enumeration. */
+const SOLUNAR_PHASE_TO_ENUM: Record<string, MoonPhase> = {
+  'New Moon': 'new_moon',
+  'Waxing Crescent': 'waxing_crescent',
+  'First Quarter': 'first_quarter',
+  'Waxing Gibbous': 'waxing_gibbous',
+  'Full Moon': 'full_moon',
+  'Waning Gibbous': 'waning_gibbous',
+  'Last Quarter': 'last_quarter',
+  'Waning Crescent': 'waning_crescent',
+};
+
 /**
  * Calculate the moon phase for a given date.
- * Uses a simplified algorithm based on the lunar cycle (~29.53 days).
+ * Delegates to the Phase 3 solunar synodic tracker (J2000-anchored, mean
+ * synodic month 29.530588853 d) and maps the qualitative phase name onto
+ * the analytics `MoonPhase` enumeration.
  */
 function getMoonPhase(date: Date): MoonPhase {
-  const knownNewMoon = new Date('2024-01-01T00:00:00Z').getTime();
-  const lunarCycle = 29.53 * 24 * 60 * 60 * 1000;
-  const daysSinceReference = (date.getTime() - knownNewMoon) / (24 * 60 * 60 * 1000);
-  const lunarDay = ((daysSinceReference % 29.53) + 29.53) % 29.53;
-  const phaseProgress = lunarDay / 29.53;
-
-  if (phaseProgress < 0.052 || phaseProgress >= 0.948) return 'new_moon';
-  if (phaseProgress < 0.181) return 'waxing_crescent';
-  if (phaseProgress < 0.310) return 'first_quarter';
-  if (phaseProgress < 0.439) return 'waxing_gibbous';
-  if (phaseProgress < 0.561) return 'full_moon';
-  if (phaseProgress < 0.690) return 'waning_gibbous';
-  if (phaseProgress < 0.819) return 'last_quarter';
-  return 'waning_crescent';
+  const state = getSynodicMoonState(date);
+  return SOLUNAR_PHASE_TO_ENUM[state.phaseName] ?? 'new_moon';
 }
 
 /**
@@ -332,5 +336,93 @@ export interface CatchAnalytics {
   catchDateRange: {
     startDate: string | null;
     endDate: string | null;
+  };
+}
+
+/**
+ * One structured row of the solunar-bound feeding index matrix.
+ */
+export interface FeedingIndexEntry {
+  phase: MoonPhase;
+  phaseLabel: string;
+  catchCount: number;
+  /** Share of the dataset bound to this phase, 0–100 (rounded). */
+  percentage: number;
+  /** Catch concentration relative to the strongest phase, 0–100 (rounded). */
+  feedingIndex: number;
+}
+
+/**
+ * Binds an environmental catch dataset to the calculated lunar phases
+ * synchronously: every record's `captured_at` instant is resolved through
+ * the Phase 3 solunar synodic tracker (J2000-anchored), bucketed into the
+ * eight-phase matrix, and reduced to structured feeding indices.
+ *
+ * @param catches - Raw catch records; malformed rows are skipped.
+ * @returns Eight matrix rows (one per phase, fixed order), O(n) over the dataset.
+ */
+export function generateFeedingIndex(catches: RawCatchRecord[]): FeedingIndexEntry[] {
+  const phases = Object.keys(MOON_PHASE_LABELS) as MoonPhase[];
+  const counts = new Map<MoonPhase, number>(phases.map((phase) => [phase, 0]));
+  let total = 0;
+
+  if (Array.isArray(catches)) {
+    for (const record of catches) {
+      if (!record || typeof record.captured_at !== 'string') continue;
+      const instant = new Date(record.captured_at);
+      if (Number.isNaN(instant.getTime())) continue;
+      const phase = getMoonPhase(instant);
+      counts.set(phase, (counts.get(phase) ?? 0) + 1);
+      total += 1;
+    }
+  }
+
+  const maxCount = Math.max(0, ...counts.values());
+  return phases.map((phase) => {
+    const count = counts.get(phase) ?? 0;
+    const concentration = maxCount > 0 ? (count / maxCount) * 100 : 0;
+    return {
+      phase,
+      phaseLabel: MOON_PHASE_LABELS[phase],
+      catchCount: count,
+      percentage: total > 0 ? Math.round((count / total) * 100) : 0,
+      feedingIndex: Math.round(concentration),
+    };
+  });
+}
+
+/**
+ * Historical analytics compilation extended with the solunar feeding matrix.
+ */
+export interface HistoricalAnalytics extends CatchAnalytics {
+  feedingIndexMatrix: FeedingIndexEntry[];
+  /** Phase holding the highest feeding index, or `null` for empty datasets. */
+  peakFeedingPhase: MoonPhase | null;
+}
+
+/**
+ * Core historical analytics pipeline with the solunar engine integrated:
+ * returns the standard {@link CatchAnalytics} compilation plus the
+ * solunar-bound {@link generateFeedingIndex} matrix and its peak phase.
+ *
+ * @param catches - Raw catch records; null/undefined degrade to the empty compilation.
+ * @returns Synchronous, deterministic aggregation — O(n) over the dataset.
+ */
+export function getHistoricalAnalytics(catches: RawCatchRecord[]): HistoricalAnalytics {
+  const base = compileCatchAnalytics(Array.isArray(catches) ? catches : []);
+  const feedingIndexMatrix = generateFeedingIndex(catches);
+
+  const peak = feedingIndexMatrix.reduce<FeedingIndexEntry | null>(
+    (best, entry) =>
+      entry.catchCount > 0 && (best === null || entry.feedingIndex > best.feedingIndex)
+        ? entry
+        : best,
+    null,
+  );
+
+  return {
+    ...base,
+    feedingIndexMatrix,
+    peakFeedingPhase: peak ? peak.phase : null,
   };
 }

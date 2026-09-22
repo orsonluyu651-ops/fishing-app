@@ -15,6 +15,13 @@ import {
 import { countCachedTiles } from '@/lib/mapTileCache';
 import { usePremiumStatus } from '@/lib/premiumAccess';
 import { PremiumPaywall } from '@/components/PremiumPaywall';
+import {
+  createQuadtree,
+  insert,
+  queryViewport,
+  type GeoPoint,
+  type SpatialBoundingBox,
+} from '@/lib/mapClusterEngine';
 
 // ════════════════════════════════════════════════════════════
 // FishloreMap — the Guide tab's interactive OSM map with an
@@ -53,6 +60,33 @@ const GOLD_COAST_REGION = {
   longitudeDelta: 0.35,
 };
 
+/**
+ * Catch-pin projection of the hotspot list into the quadtree input contract
+ * (`GeoPoint`): `species` carries the hotspot's target fish for the index.
+ */
+const HOTSPOT_POINTS: GeoPoint[] = HOTSPOTS.map((spot) => ({
+  id: spot.id,
+  latitude: spot.latitude,
+  longitude: spot.longitude,
+  species: spot.fish,
+}));
+
+/**
+ * MapView region → `[minLng, minLat, maxLng, maxLat]`. The lng-first tuple
+ * order is the SpatialBoundingBox contract — preserved verbatim, never
+ * reordered (docs/phase2-quadtree-seam-audit.md §2.2).
+ */
+function regionToSpatialBox(region: typeof GOLD_COAST_REGION): SpatialBoundingBox {
+  const halfLat = region.latitudeDelta / 2;
+  const halfLng = region.longitudeDelta / 2;
+  return [
+    region.longitude - halfLng,
+    region.latitude - halfLat,
+    region.longitude + halfLng,
+    region.latitude + halfLat,
+  ];
+}
+
 const BUTTON_MAX_TILES = 400;
 const BACKGROUND_MAX_TILES = 60;
 const PREFETCH_DEBOUNCE_MS = 1500;
@@ -69,6 +103,11 @@ export default function FishloreMap() {
   const [region, setRegion] = useState(GOLD_COAST_REGION);
   const [progress, setProgress] = useState<CacheProgress | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+
+  // Quadtree query output — the point set actually rendered this frame.
+  // Seeded with the full dataset so the first paint matches the pre-quadtree
+  // behavior; every region settle re-narrows it via queryViewport.
+  const [visiblePoints, setVisiblePoints] = useState<GeoPoint[]>(HOTSPOT_POINTS);
 
   const buttonAbortRef = useRef<AbortController | null>(null);
   const prefetchAbortRef = useRef<AbortController | null>(null);
@@ -148,6 +187,15 @@ export default function FishloreMap() {
     (next: typeof GOLD_COAST_REGION) => {
       setRegion(next);
       schedulePrefetch(next);
+
+      // Quadtree seam (Phase 2): on every settled shift, re-index the point
+      // dataset into a fresh tree rooted at the viewport box and query it
+      // synchronously — O(log n + k) subdivision instead of a linear marker
+      // sweep. The output collection feeds the render state directly.
+      const viewportBox = regionToSpatialBox(next);
+      const tree = createQuadtree(viewportBox);
+      for (const point of HOTSPOT_POINTS) insert(tree, point);
+      setVisiblePoints(queryViewport(tree, viewportBox));
     },
     [schedulePrefetch],
   );
@@ -206,6 +254,13 @@ export default function FishloreMap() {
   const cachePercent =
     progress && progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
 
+  // Markers consume the quadtree output as an id set — O(1) membership per
+  // hotspot, preserving the existing marker JSX contract below untouched.
+  const visiblePointIds = useMemo(
+    () => new Set(visiblePoints.map((p) => p.id)),
+    [visiblePoints],
+  );
+
   return (
     <View style={styles.card}>
       <View style={styles.mapContainer}>
@@ -227,7 +282,7 @@ export default function FishloreMap() {
             // iOS: hide the Apple basemap so the OSM raster is authoritative.
             shouldReplaceMapContent={Platform.OS === 'ios'}
           />
-          {HOTSPOTS.map((spot) => (
+          {HOTSPOTS.filter((spot) => visiblePointIds.has(spot.id)).map((spot) => (
             <Marker
               key={spot.id}
               coordinate={{ latitude: spot.latitude, longitude: spot.longitude }}
