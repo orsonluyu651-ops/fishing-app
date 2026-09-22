@@ -39,6 +39,13 @@ Private helpers (all O(1)): `clampZoom` (floor + clamp 0–22, `NaN→0`), `cell
 | Type-guard duck narrow | `isClusterNode` L62–67 | ✅ exported; brittle `(value as MapCluster)` double-cast — a `kind: 'cluster'` discriminant field would be strictly safer; **non-blocking** |
 | Legacy shape preservation | `MapClusterNode` + `clusterMarkersByGrid` | ✅ intact; any quadtree refactor must not delete these |
 | Deterministic cluster identity | L115: `id = cluster_` + **sorted** joined ids | ✅ order-independent id — output **array order** is cell-insertion-order (documented L82), but ids are stable under reordering |
+
+### 1.4 Latent edge notes (non-blocking, for the quadtree implementation phase)
+
+- `Math.floor(lat/cell)` handles negative hemispheres correctly (floor toward −∞) — uniform cells globally. **Antimeridian wrap is NOT handled** (|lng| > 180 points silently drop via bbox filter).
+- Degenerate box (min > max) yields `[]` silently — no explicit test asserts this; add one when touching the seam.
+- z=22 cell ≈ 1.9×10⁻⁶° — float-key granularity edge; `clampZoom`'s cap is the real protection.
+- `FishloreMap.tsx` L76: `statusTimerRef` indentation anomaly (cosmetic only).
 ---
 
 ## Task 2 — Quadtree Quadrant Seam Isolation
@@ -83,6 +90,7 @@ interface QuadtreeIndex {
 Sub-quadrant split rule (midpoint of node `bounds`, **not** centroid of points — keeps tree shape input-order-independent): NW `(midLng, midLat, maxLng, maxLat)` · NE `(midLng, minLat, maxLng, midLat)` · SW `(minLng, minLat, midLng, midLat)` · SE `(minLng, midLat, midLng, maxLat)`. Points exactly on a midline go to the lower/left quadrant (deterministic).
 
 **Migration seam rule:** the quadtree query must emit the **same `GeoPoint | MapCluster` union** through the same exported `isClusterNode` guard, with cluster ids built by the same sorted-`containsIds` scheme (L115) — id stability makes the swap invisible to marker diffing.
+
 ### 2.3 `bestOfClusterProfile()` microbenchmark contract — safeguard parameters
 
 Contract location: `performanceProfiler.test.ts` L87–98 (best-of-3 wrapper over `profileExecutionTime`). Its consumers hard-code these invariants; a quadtree transition must not perturb them:
@@ -106,13 +114,3 @@ Contract location: `performanceProfiler.test.ts` L87–98 (best-of-3 wrapper ove
 - `npx tsc --noEmit` → TS_EXIT_0.
 - `npx jest --silent` → 34 suites / 245 tests green (repo-tracked hook re-enforces on commit).
 
-
-
-
-
-### 1.4 Latent edge notes (non-blocking, for the quadtree implementation phase)
-
-- `Math.floor(lat/cell)` handles negative hemispheres correctly (floor toward −∞) — uniform cells globally. **Antimeridian wrap is NOT handled** (|lng| > 180 points silently drop via bbox filter).
-- Degenerate box (min > max) yields `[]` silently — no explicit test asserts this; add one when touching the seam.
-- z=22 cell ≈ 1.9×10⁻⁶° — float-key granularity edge; `clampZoom`'s cap is the real protection.
-- `FishloreMap.tsx` L76: `statusTimerRef` indentation anomaly (cosmetic only).
