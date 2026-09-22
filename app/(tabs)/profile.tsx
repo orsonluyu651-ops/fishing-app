@@ -5,6 +5,10 @@ import { getCacheTelemetryDetails, purgeMapTileCache, type CacheTelemetry, type 
 import { supabase } from '../../src/lib/supabase';
 import { compileCatchAnalytics, type RawCatchRecord, type CatchAnalytics } from '../../src/lib/analyticsEngine';
 import { AnalyticsChartPanel } from '../../src/lib/analyticsCharts';
+import { registerForPushNotificationsAsync } from '../../src/lib/pushEngine';
+import { exportCatchesToCSV, exportCatchesToPDF } from '../../src/lib/exportEngine';
+import { CatchExportControls } from '../../src/components/CatchExportControls';
+import { Alert } from 'react-native';
 
 export default function ProfileScreen() {
   const [telemetry, setTelemetry] = useState<CacheTelemetry | null>(null);
@@ -13,6 +17,22 @@ export default function ProfileScreen() {
   const [purgeResult, setPurgeResult] = useState<PurgeResult | null>(null);
   const [analytics, setAnalytics] = useState<CatchAnalytics | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
+  const [user, setUser] = useState<{ id: string; username: string } | null>(null);
+  const [processingExport, setProcessingExport] = useState(false);
+
+  const handleTriggerExport = async (format: 'csv' | 'pdf') => {
+    if (!user?.id) return;
+    setProcessingExport(true);
+
+    const success = format === 'csv'
+      ? await exportCatchesToCSV(user.id)
+      : await exportCatchesToPDF(user.id, user.username || 'Angler');
+
+    setProcessingExport(false);
+    if (!success) {
+      Alert.alert("Export Cancelled", "No catch data records were located or conversion pipeline failed.");
+    }
+  };
 
   const refreshTelemetry = async () => {
     setIsRefreshing(true);
@@ -61,7 +81,22 @@ export default function ProfileScreen() {
   useEffect(() => {
     refreshTelemetry();
     loadAnalytics();
+
+    // Fetch current user and register for push notifications
+    const initUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setUser({ id: user.id, username: user.email?.split('@')[0] ?? 'Angler' });
+      }
+    };
+    initUser();
   }, []);
+
+  useEffect(() => {
+    if (user?.id) {
+      void registerForPushNotificationsAsync(user.id);
+    }
+  }, [user?.id]);
 
   const handlePurgeCache = async () => {
     setIsPurging(true);
@@ -200,6 +235,36 @@ export default function ProfileScreen() {
         ) : (
           <Text style={styles.errorText}>Failed to load cache statistics.</Text>
         )}
+      </View>
+
+      {/* ⚙️ Account Quick Actions */}
+      <View style={{ flexDirection: 'row', paddingHorizontal: 16, marginVertical: 12, gap: 10 }}>
+        <TouchableOpacity
+          disabled={processingExport}
+          onPress={() => handleTriggerExport('csv')}
+          style={{ flex: 1, backgroundColor: '#f1f5f9', paddingVertical: 12, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: '#cbd5e1' }}
+        >
+          <Text style={{ color: '#334155', fontWeight: '600', fontSize: 14 }}>Export CSV Data</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          disabled={processingExport}
+          onPress={() => handleTriggerExport('pdf')}
+          style={{ flex: 1, backgroundColor: '#0284c7', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}
+        >
+          <Text style={{ color: '#fff', fontWeight: '600', fontSize: 14 }}>Print PDF Summary</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* 📤 Local Log Export Share Dashboard */}
+      <View style={{ paddingHorizontal: 16, marginVertical: 12 }}>
+        <CatchExportControls
+          catches={(analytics?.speciesBreakdown ?? []).map((entry) => ({
+            species: entry.species,
+            length: entry.avgLength ?? null,
+            date: '',
+          }))}
+        />
       </View>
 
       {/* ⚙️ Account Quick Actions */}

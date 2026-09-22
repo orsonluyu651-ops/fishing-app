@@ -2,34 +2,39 @@ import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 
 // ─────────────────────────────────────────────────────────────
-// Ask TideWire — remote client (docs/ai-assistant-spec.md §6).
+// Ask Fishlore — remote client (docs/ai-assistant-spec.md §6).
 //
 // Thin wrapper around supabase.functions.invoke('ask-tidewire'). The LLM
 // provider key lives only in the Edge Function runtime; this module never
 // touches it. Error mapping mirrors the offline catch queue taxonomy:
 // 4xx (401/400/422) are permanent → surfaced, no auto-retry; 408/429/5xx and
 // network failures are transient → the UI invites a retry.
+//
+// NOTE: the invoked Edge Function slug stays 'ask-tidewire' — it is the
+// deployed Supabase function name (supabase/functions/ask-tidewire), and
+// renaming it here alone would break the guide until the function is
+// redeployed under a matching slug.
 // ─────────────────────────────────────────────────────────────
 
-export interface AskTidewireTurn {
+export interface AskFishloreTurn {
   role: 'user' | 'assistant';
   content: string;
 }
 
-export interface AskTidewireResult {
+export interface AskFishloreResult {
   text: string;
   provider: string | null;
   modelVersion: string | null;
   latencyMs: number | null;
 }
 
-export interface AskTidewireOptions {
-  history?: AskTidewireTurn[];
+export interface AskFishloreOptions {
+  history?: AskFishloreTurn[];
   /** Report-only regional context; rounded server-side, never echoed back. */
   coordinates?: { latitude: number; longitude: number } | null;
 }
 
-interface AskTidewireEnvelope {
+interface AskFishloreEnvelope {
   answer?: { text?: string };
   provider?: string;
   model_version?: string;
@@ -37,7 +42,7 @@ interface AskTidewireEnvelope {
 }
 
 /** Human-readable copy for the error envelope documented in the spec (§5.5). */
-export async function describeAskTidewireError(error: unknown): Promise<string> {
+export async function describeAskFishloreError(error: unknown): Promise<string> {
   if (error instanceof FunctionsHttpError) {
     try {
       const payload = (await error.context.json()) as { error?: string; message?: string };
@@ -61,11 +66,12 @@ export async function describeAskTidewireError(error: unknown): Promise<string> 
   return 'The guide could not answer just now.';
 }
 
-export async function askTidewireRemote(
+export async function askFishloreRemote(
   message: string,
-  options: AskTidewireOptions = {},
-): Promise<AskTidewireResult> {
-  const { data, error } = await supabase.functions.invoke<AskTidewireEnvelope>('ask-tidewire', {
+  options: AskFishloreOptions = {},
+): Promise<AskFishloreResult> {
+  // Slug intentionally unchanged: the deployed Edge Function is 'ask-tidewire'.
+  const { data, error } = await supabase.functions.invoke<AskFishloreEnvelope>('ask-tidewire', {
     body: {
       message,
       history: options.history ?? [],

@@ -10,7 +10,7 @@ import { supabase } from './supabase';
 //
 // Shared by:
 //   * Add Catch  — evaluates whether a measured length is keepable.
-//   * Ask Tidewire — renders a rule card from the same live values, so the
+//   * Ask Fishlore — renders a rule card from the same live values, so the
 //     assistant can never state a size/bag that differs from what Add Catch
 //     enforces.
 //

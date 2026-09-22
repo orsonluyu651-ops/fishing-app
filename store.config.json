@@ -1,0 +1,20 @@
+{
+  "$comment": "Fishlore storefront pre-flight asset. Local review/QA reference only — EAS Metadata (eas metadata:push) reads a different schema ({configVersion, apple, android}) and does not consume this file. Every URL below must resolve to a live, publicly reachable page before submission, and the App Review demo password is injected in App Store Connect (never committed).",
+  "appStoreMetadata": {
+    "primaryLocale": "en-AU",
+    "categories": ["Sports", "Utilities"],
+    "privacyPolicyUrl": "https://fishlore.app/privacy",
+    "supportUrl": "https://fishlore.app/support",
+    "marketingUrl": "https://fishlore.app",
+    "ageRating": "4+",
+    "copyright": "2026 Fishlore App Architecture Group"
+  },
+  "playStoreMetadata": {
+    "defaultLanguage": "en-AU",
+    "contentRating": "Everyone",
+    "privacyPolicyUrl": "https://fishlore.app/privacy",
+    "developerEmail": "ops@fishlore.app",
+    "containsAds": false,
+    "pricing": "Free-Tier / In-App Purchases Available"
+  }
+}

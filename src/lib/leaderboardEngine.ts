@@ -190,3 +190,31 @@ export async function fetchUserWeightRank(
     return null;
   }
 }
+
+export interface LeaderboardRow {
+  user_id: string;
+  username: string;
+  total_weight_lbs: number;
+  total_catches: number;
+  heaviest_catch_lbs: number;
+  leaderboard_rank: number;
+}
+
+/**
+ * Pulls sorted leaderboard positions directly from the database view engine.
+ */
+export async function fetchTopAnglerRanks(limit = 25): Promise<LeaderboardRow[]> {
+  try {
+    const { data, error } = await supabase
+      .from('leaderboard_ranks')
+      .select('*')
+      .order('leaderboard_rank', { ascending: true })
+      .limit(limit);
+
+    if (error) throw error;
+    return (data as LeaderboardRow[]) || [];
+  } catch (err) {
+    console.error('Leaderboard query pipeline failed:', err);
+    return [];
+  }
+}

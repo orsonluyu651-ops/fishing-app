@@ -21,6 +21,7 @@ import {
 import { updateQueuedCatchEntry } from '../../src/lib/offlineQueueMutation';
 import { optimizeCatchImage } from '../../src/lib/mediaOptimizer';
 import { askAssistant, type AssistantAnswer } from '../../src/lib/assistant';
+import { fetchFollowingIds, fetchFollowingCatchesRange } from '../../src/lib/socialEngine';
 
 interface CatchItem {
   id: string;
@@ -98,6 +99,8 @@ export default function FeedScreen() {
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [loadingComments, setLoadingComments] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [feedMode, setFeedMode] = useState<'global' | 'following'>('global');
+  const [followingIds, setFollowingIds] = useState<string[]>([]);
   // Mirror of currentUserId for callbacks registered once on mount (the NetInfo
   // listener). Without it those callbacks close over the initial null and would
   // never be able to scope a sync to the signed-in user.
@@ -144,6 +147,12 @@ export default function FeedScreen() {
    * inclusive row indices; each window is exactly PAGE_SIZE rows.
    */
   const fetchFeedPage = async (start: number): Promise<any[]> => {
+    if (feedMode === 'following') {
+      if (followingIds.length === 0) return [];
+      const { data, error } = await fetchFollowingCatchesRange(followingIds, start, start + PAGE_SIZE - 1);
+      if (error) throw error;
+      return data ?? [];
+    }
     const { data, error } = await supabase
       .from('feed_posts')
       .select('*')
@@ -160,6 +169,8 @@ export default function FeedScreen() {
       if (user) {
         setCurrentUserId(user.id);
         currentUserIdRef.current = user.id;
+        const ids = await fetchFollowingIds(user.id);
+        setFollowingIds(ids);
       }
 
       // Page 0 resets the pagination window: a refresh (new catch logged,
@@ -581,13 +592,6 @@ export default function FeedScreen() {
       if (insertError) throw insertError;
 
       // 3) Refresh the feed (the create_feed_post_on_catch trigger auto-creates the post).
-      console.log('Catch Logged:', {
-        catchId: inserted?.[0]?.id ?? null,
-        species: trimmedSpecies,
-        length: parsedLength,
-        location,
-        mediaPath,
-      });
       resetCatchForm();
       await initializeFeed();
       await refreshPendingQueue();
@@ -802,8 +806,32 @@ export default function FeedScreen() {
     );
   }
 
+  if (feedMode === 'following' && followingIds.length === 0) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 }}>
+        <Text style={{ textAlign: 'center', color: '#888', fontSize: 16, lineHeight: 24 }}>
+          Your network is quiet! Explore the global feed or leaderboard to find local anglers to follow.
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
+      <View style={{ flexDirection: 'row', padding: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' }}>
+        <TouchableOpacity
+          style={{ flex: 1, paddingVertical: 8, alignItems: 'center', borderBottomWidth: feedMode === 'global' ? 2 : 0, borderBottomColor: '#007AFF' }}
+          onPress={() => { setFeedMode('global'); }}
+        >
+          <Text style={{ fontWeight: feedMode === 'global' ? 'bold' : 'normal', color: feedMode === 'global' ? '#007AFF' : '#666' }}>Global</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={{ flex: 1, paddingVertical: 8, alignItems: 'center', borderBottomWidth: feedMode === 'following' ? 2 : 0, borderBottomColor: '#007AFF' }}
+          onPress={() => { setFeedMode('following'); }}
+        >
+          <Text style={{ fontWeight: feedMode === 'following' ? 'bold' : 'normal', color: feedMode === 'following' ? '#007AFF' : '#666' }}>Following</Text>
+        </TouchableOpacity>
+      </View>
       {pendingEntries.length > 0 && (
         <TouchableOpacity
           style={[styles.syncBanner, failedCount > 0 && styles.syncBannerAlert]}
@@ -1014,11 +1042,11 @@ export default function FeedScreen() {
       </Modal>
     {/* FAB */}
         <TouchableOpacity style={[styles.fab, { bottom: 88 }]} onPress={() => { animateLayout(); setModalVisible(true); }}><Text style={styles.fabText}>+</Text></TouchableOpacity>
-      {/* Ask Tidewire — curated fishing guide */}
+      {/* Ask Fishlore — curated fishing guide */}
       <TouchableOpacity
         style={[styles.fab, { backgroundColor: '#0284c7' }]}
         onPress={openAssistant}
-        accessibilityLabel="Ask Tidewire guide"
+        accessibilityLabel="Ask Fishlore guide"
       >
         <Ionicons name="chatbubble-ellipses-outline" size={26} color="#fff" />
       </TouchableOpacity>
@@ -1204,11 +1232,11 @@ export default function FeedScreen() {
   </Modal>
 )}
 
-      {/* Ask Tidewire guide modal */}
+      {/* Ask Fishlore guide modal */}
       <Modal visible={assistantVisible} animationType="slide" transparent={true} onRequestClose={closeAssistant}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Ask Tidewire</Text>
+            <Text style={styles.modalTitle}>Ask Fishlore</Text>
             <Text style={{ fontSize: 13, color: '#64748b', marginBottom: 12 }}>
               Curated Gold Coast fishing guide — size limits, spots, bait, rigs &amp; how logging works.
             </Text>

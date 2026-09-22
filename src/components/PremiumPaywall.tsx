@@ -1,7 +1,7 @@
 /**
  * PremiumPaywall — Conversion-focused membership upgrade sheet.
  *
- * Rendered in-place by gated screens (Ask Tidewire, map tile cache) when the
+ * Rendered in-place by gated screens (Ask Fishlore, map tile cache) when the
  * signed-in user's profile has is_pro = false.  Binds the primary CTA to the
  * verified Stripe Payment-Sheet flow exposed by useStripePayment, surfaces
  * in-CTA loading spinners during intent initialization, and catches every
@@ -36,7 +36,7 @@ const FEATURES: { icon: React.ComponentProps<typeof Ionicons>['name']; title: st
   },
   {
     icon: 'chatbubble-ellipses-outline',
-    title: 'Ask Tidewire AI Fishing Guide',
+    title: 'Ask Fishlore AI Fishing Guide',
     description: 'Real-time, regulation-grounded fishing advice via the AI assistant.',
   },
   {

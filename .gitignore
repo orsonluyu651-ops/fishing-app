@@ -26,3 +26,12 @@ vscode-buffers-archive/
 *.tsbuildinfo
 .expo-shared/
 
+# Store submission credentials — never commit signing/automation material.
+# eas.json submit.production.android.serviceAccountKeyPath points at this file.
+android-service-account-key.json
+*.keystore
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+

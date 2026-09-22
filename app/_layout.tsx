@@ -1,9 +1,23 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, ErrorUtils, StyleSheet, View, Alert } from 'react-native';
 import { Slot, useRouter, useSegments } from 'expo-router';
+import * as Linking from 'expo-linking';
 import { supabase } from '../src/lib/supabase';
 import { attachNotificationRouting } from '../src/lib/notifications';
 import { registerBackgroundCatchSync } from '../src/lib/backgroundSync';
+import { parseAndVerifySpotLink } from '../src/lib/spotSharingEngine';
+import { UpdateBoundary } from '../src/components/UpdateBoundary';
+import { TelemetryBoundary } from '../src/components/TelemetryBoundary';
+import { reportNativeCrash } from '../src/lib/telemetryEngine';
+
+// Intercept unhandled global native promise rejections safely
+if (!__DEV__) {
+  const globalHandler = ErrorUtils.getGlobalHandler();
+  ErrorUtils.setGlobalHandler((error: any, isFatal: boolean | undefined) => {
+    reportNativeCrash(`[Global Fatal: ${isFatal}] ${error?.message || 'Unknown Native Fault'}`, error?.stack);
+    if (globalHandler) globalHandler(error, isFatal);
+  });
+}
 
 export default function RootLayout() {
   const segments = useSegments();
@@ -67,15 +81,42 @@ export default function RootLayout() {
     void registerBackgroundCatchSync();
   }, []);
 
+  // Deep-link handler for inbound spot-share URLs: verify the cryptographic
+  // token, surface the waterway coordinates to the user, and route them to the
+  // map view in production.
+  useEffect(() => {
+    const handleIncomingUrl = (event: { url: string }) => {
+      const verifiedSpot = parseAndVerifySpotLink(event.url);
+      if (verifiedSpot) {
+        Alert.alert(
+          'Secret Waterway Shared!',
+          `Coordinates package decoded for point: "${verifiedSpot.name}".\n\nTarget Position:\nLat: ${verifiedSpot.lat}\nLng: ${verifiedSpot.lng}`
+        );
+      }
+    };
+
+    const subscription = Linking.addEventListener('url', handleIncomingUrl);
+
+    Linking.getInitialURL().then((url) => {
+      if (url) handleIncomingUrl({ url });
+    });
+
+    return () => subscription.remove();
+  }, []);
+
   return (
-    <View style={styles.rootContainer}>
-      <Slot />
-      {loading && (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
+    <TelemetryBoundary>
+      <UpdateBoundary>
+        <View style={styles.rootContainer}>
+          <Slot />
+          {loading && (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#007AFF" />
+            </View>
+          )}
         </View>
-      )}
-    </View>
+      </UpdateBoundary>
+    </TelemetryBoundary>
   );
 }
 

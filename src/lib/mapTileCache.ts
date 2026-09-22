@@ -17,7 +17,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 export const TILE_SOURCE_URL_TEMPLATE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
 const TILES_DIR_NAME = 'tiles';
-const TILE_USER_AGENT = 'TideWire/1.0 (fishing-app; offline map tile cache)';
+const TILE_USER_AGENT = 'Fishlore/1.0 (fishlore-app; offline map tile cache)';
 export const MIN_ZOOM = 3;
 export const MAX_ZOOM = 17;
 

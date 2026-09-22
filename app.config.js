@@ -1,4 +1,4 @@
-//================]]]]]]]]]]]]]]]]]]]`0-98` Expo app config (replaces app.json).
+// Expo app config (replaces app.json).
 //
 // Everything dynamic is read from the environment at config-evaluation time:
 //   * local dev — Expo CLI auto-loads .env before evaluating this file;
@@ -21,8 +21,8 @@ const googleMapsAndroidApiKey = process.env.GOOGLE_MAPS_ANDROID_API_KEY;
 
 module.exports = {
   expo: {
-    name: 'Tidewire',
-    slug: 'tidewire',
+    name: 'Fishlore',
+    slug: 'fishlore-app',
     version: '1.0.0',
     orientation: 'portrait',
     icon: './assets/icon.png',
@@ -37,15 +37,19 @@ module.exports = {
     },
     assetBundlePatterns: ['**/*'],
     ios: {
-      supportsTablet: true,
-      bundleIdentifier: 'com.yourname.fishingapp',
+      supportsTablet: false,
+      bundleIdentifier: 'com.fishlore.app',
+      // Hermes per-platform enforcement (mirrors top-level jsEngine):
+      // AOT bytecode, smaller heap, faster cold start on iOS.
+      jsEngine: 'hermes',
       infoPlist: {
         NSLocationWhenInUseUsageDescription:
-          'Tidewire uses your location to tag catches with GPS coordinates.',
+          'Fishlore requires background and local geographic metrics to map exact catch strike coordinates, log ambient lunar trends, and sync telemetry arrays while offline.',
         NSPhotoLibraryUsageDescription:
-          'Tidewire needs photo library access so you can attach catch photos.',
+          'Fishlore requires local storage media access to append structural catch log visuals, retrieve existing fish snapshots, and optimize offline memory tile caches.',
         NSCameraUsageDescription:
-          'Tidewire needs camera access so you can take catch photos.',
+          'Fishlore requires camera array interactions to capture telemetry logs, catalog species data snapshots, and store high-resolution catch records inside the local device vault.',
+        ITSAppUsesNonExemptEncryption: false,
         // Background fetch — required for the native (dev-client / EAS) builds
         // so the BACKGROUND_CATCH_SYNC_TASK wakeup fires while the app is
         // minimized (src/lib/backgroundSync.ts).
@@ -53,11 +57,20 @@ module.exports = {
       },
     },
     android: {
-      package: 'com.yourname.fishingapp',
+      package: 'com.fishlore.app',
+      // Secure local-data state: opts OUT of Android Auto Backup (adb/cloud
+      // restore) so queued catches, auth sessions and offline tiles are never
+      // silently resurrected onto another device.
+      allowBackup: false,
+      // Hermes per-platform enforcement (mirrors top-level jsEngine):
+      // AOT bytecode, smaller heap, faster cold start on Android.
+      jsEngine: 'hermes',
       permissions: [
         'ACCESS_COARSE_LOCATION',
         'ACCESS_FINE_LOCATION',
+        'CAMERA',
         'READ_EXTERNAL_STORAGE',
+        'WRITE_EXTERNAL_STORAGE',
         'READ_MEDIA_IMAGES',
       ],
       adaptiveIcon: {
@@ -70,7 +83,7 @@ module.exports = {
         ? { config: { googleMaps: { apiKey: googleMapsAndroidApiKey } } }
         : {}),
     },
-    scheme: 'tidewire',
+    scheme: 'fishlore',
     web: {
       bundler: 'metro',
       output: 'single',
@@ -82,7 +95,7 @@ module.exports = {
         'expo-location',
         {
           locationAlwaysAndWhenInUsePermission:
-            'Allow Tidewire to use your location to tag catches with GPS coordinates.',
+            'Allow Fishlore to use your location to tag catches with GPS coordinates.',
         },
       ],
       // Android release optimization: R8/ProGuard minification + resource
@@ -100,6 +113,7 @@ module.exports = {
       // Notification engine: default Android channel + icon/color and sound
       // wiring for remote push on both platforms.
       'expo-notifications',
+      'expo-updates',
     ],
     extra: {
       router: {},
@@ -108,5 +122,14 @@ module.exports = {
       },
     },
     owner: 'wiretidetest01',
+    runtimeVersion: {
+      policy: 'appVersion',
+    },
+    updates: {
+      url: 'https://expo.dev',
+      enabled: true,
+      checkAutomatically: 'ON_APP_START',
+      fallbackToCacheTimeout: 30000,
+    },
   },
 };

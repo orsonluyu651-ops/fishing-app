@@ -5,7 +5,6 @@
   },
   "build": {
     "development": {
-      "description": "Native dev-client build for real devices. Required to debug custom native modules (react-native-maps, expo-file-system) that Expo Go cannot host.",
       "developmentClient": true,
       "distribution": "internal",
       "ios": {
@@ -18,7 +17,6 @@
       "channel": "development"
     },
     "preview": {
-      "description": "Optimized release build for the internal team loop: installable APK on Android, ad-hoc IPA on iOS.",
       "distribution": "internal",
       "ios": {
         "simulator": false
@@ -30,7 +28,6 @@
       "channel": "preview"
     },
     "production": {
-      "description": "Store build: AAB for Google Play and IPA for the App Store. Release/production Metro optimization (minified Hermes bytecode), auto-incremented versions.",
       "autoIncrement": true,
       "ios": {
         "simulator": false
@@ -44,8 +41,14 @@
   },
   "submit": {
     "production": {
-      "ios": {},
-      "android": {}
+      "ios": {
+        "language": "en-AU"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./android-service-account-key.json",
+        "track": "internal",
+        "releaseStatus": "completed"
+      }
     }
   }
 }

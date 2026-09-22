@@ -38,7 +38,7 @@ Notifications.setNotificationHandler({
 async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync('alerts', {
-    name: 'Tidewire alerts',
+    name: 'Fishlore alerts',
     description: 'Weather swings, tide movements and social activity.',
     // AndroidImportance.HIGH (6) — the enum is not re-exported from the
     // expo-notifications package root in SDK 57, so the member value is used.

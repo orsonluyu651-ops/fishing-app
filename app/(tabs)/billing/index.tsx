@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
@@ -14,10 +13,6 @@ const PRICING = {
 export default function BillingScreen() {
   const { isPro, loading: premiumLoading } = usePremiumStatus();
   const { isLoading: stripeLoading, error: stripeError, presentPaymentSheet } = useStripePayment();
-
-  useEffect(() => {
-    console.log("Billing screen mounted");
-  }, []);
 
   if (premiumLoading || stripeLoading) {
     return (

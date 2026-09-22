@@ -199,7 +199,9 @@ export async function askTidewireRemote(
 
 ## 10. Rollout phases
 
-> Status 2026-09-21: **Phases A–C implemented** — route, client wrapper (`src/lib/askTidewire.ts`), chat UI and the provider-backed proxy function (`supabase/functions/ask-tidewire/index.ts`) are in place. Phase D (streaming) and the DB-backed quota (§8) remain open.
+> Status 2026-09-21: **Phases A–C implemented** — route, client wrapper (`src/lib/askFishlore.ts`), chat UI and the provider-backed proxy function (`supabase/functions/ask-tidewire/index.ts`) are in place. Phase D (streaming) and the DB-backed quota (§8) remain open.
+>
+> Namespace note (Fishlore rebrand): the client module, component and route were renamed — `src/lib/askTidewire.ts` → `src/lib/askFishlore.ts`, `src/components/TidewireMap.tsx` → `src/components/FishloreMap.tsx`, `app/ask-tidewire/` → `app/ask-fishlore/`. The Edge Function slug (`ask-tidewire`) and every `TIDEWIRE_*` CI/seed secret name are deliberately unchanged — they are deployed/external contracts, not internal identifiers. Code samples and the route path below predate the rename.
 
 - **Phase A (this scaffold):** route reserved at `app/ask-tidewire/index.tsx`; this spec; jest baseline pinning the failure taxonomy (`src/lib/__tests__/offlineCatchQueue.test.ts`). ✅
 - **Phase B:** Edge Function shell returns deterministic-engine results through the §5 contract (no provider call yet) — lets client wiring, auth and quota land safely. ✅ (superseded: the live function ships with provider support and the deterministic engine remains the documented fallback.)

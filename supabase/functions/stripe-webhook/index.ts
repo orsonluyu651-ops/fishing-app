@@ -1,4 +1,124 @@
+import { serve } from 'https://deno.land/std@0.195.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import Stripe from 'https://esm.sh/stripe@14.18.0';
+
+const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
+  apiVersion: '2023-10-16' as Stripe.LatestApiVersion,
+  httpClient: Stripe.createFetchHttpClient(),
+});
+
+const supabaseAdmin = createClient(
+  Deno.env.get('SUPABASE_URL') || '',
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
+);
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, stripe-signature',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Content-Type': 'application/json',
+};
+
+serve(async (req: Request): Promise<Response> => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  if (req.method !== 'POST') {
+    return new Response(
+      JSON.stringify({ error: 'method_not_allowed', message: 'Use POST for webhook events.' }),
+      { status: 405, headers: corsHeaders }
+    );
+  }
+
+  const signature = req.headers.get('stripe-signature');
+
+  if (!signature) {
+    return new Response(
+      JSON.stringify({ error: 'missing_signature', message: 'Missing cryptographic validation parameter' }),
+      { status: 400, headers: corsHeaders }
+    );
+  }
+
+  try {
+    const body = await req.text();
+    const webhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET') || '';
+
+    const event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret);
+
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const userId = (session.metadata?.userId as string) ?? null;
+        const customerId = typeof session.customer === 'string' ? session.customer : null;
+
+        if (userId) {
+          const { error } = await supabaseAdmin
+            .from('profiles')
+            .update({
+              is_premium: true,
+              stripe_customer_id: customerId,
+              subscription_status: 'active',
+            })
+            .eq('id', userId);
+
+          if (error) throw error;
+        }
+        break;
+      }
+
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = typeof subscription.customer === 'string' ? subscription.customer : null;
+
+        if (customerId) {
+          const { error } = await supabaseAdmin
+            .from('profiles')
+            .update({
+              is_premium: false,
+              subscription_status: 'canceled',
+            })
+            .eq('stripe_customer_id', customerId);
+
+          if (error) throw error;
+        }
+        break;
+      }
+
+      case 'customer.subscription.updated': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = typeof subscription.customer === 'string' ? subscription.customer : null;
+
+        if (customerId) {
+          const isPremium = subscription.status === 'active';
+          const { error } = await supabaseAdmin
+            .from('profiles')
+            .update({
+              is_premium: isPremium,
+              subscription_status: isPremium ? 'active' : 'canceled',
+            })
+            .eq('stripe_customer_id', customerId);
+
+          if (error) throw error;
+        }
+        break;
+      }
+    }
+
+    return new Response(
+      JSON.stringify({ received: true, eventId: event.id }),
+      { status: 200, headers: corsHeaders }
+    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+    console.error('Stripe webhook error:', err);
+    return new Response(
+      JSON.stringify({ error: 'webhook_error', message }),
+      { status: 400, headers: corsHeaders }
+    );
+  }
+});
+
 
 /**
  * Stripe Webhook Handler

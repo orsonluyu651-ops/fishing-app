@@ -16,15 +16,15 @@ import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import { supabase } from '../../src/lib/supabase';
 import {
-  askTidewireRemote,
-  describeAskTidewireError,
-  type AskTidewireTurn,
-} from '../../src/lib/askTidewire';
+  askFishloreRemote,
+  describeAskFishloreError,
+  type AskFishloreTurn,
+} from '../../src/lib/askFishlore';
 import { usePremiumStatus } from '@/lib/premiumAccess';
 import { PremiumPaywall } from '@/components/PremiumPaywall';
 
 // ════════════════════════════════════════════════════════════
-// Ask TideWire — the streaming/chat interface.
+// Ask Fishlore — the streaming/chat interface.
 //
 // Every question is proxied through the `ask-tidewire` Supabase Edge
 // Function (docs/ai-assistant-spec.md §5): the provider key never lives on
@@ -61,7 +61,7 @@ function formatTime(timestamp: number): string {
 
 type Gate = 'checking' | 'signin' | 'pending-premium' | 'paywall' | 'ok';
 
-export default function AskTidewireScreen() {
+export default function AskFishloreScreen() {
   const router = useRouter();
   const listRef = useRef<FlatList<ChatMessage> | null>(null);
   const [gate, setGate] = useState<Gate>('checking');
@@ -131,7 +131,7 @@ export default function AskTidewireScreen() {
       if (!message || pending || gate !== 'ok') return;
 
       // Only the most recent turns ride along; the function clamps again.
-      const history: AskTidewireTurn[] = messages
+      const history: AskFishloreTurn[] = messages
         .map((item) => ({ role: item.role, content: item.text }))
         .slice(-MAX_HISTORY_TURNS);
 
@@ -144,13 +144,13 @@ export default function AskTidewireScreen() {
 
       try {
         const coordinates = await readCoordinates();
-        const result = await askTidewireRemote(message, { history, coordinates });
+        const result = await askFishloreRemote(message, { history, coordinates });
         setMessages((prev) => [
           ...prev,
           { id: nextMessageId(), role: 'assistant', text: result.text, timestamp: Date.now() },
         ]);
       } catch (error) {
-        const copy = await describeAskTidewireError(error);
+        const copy = await describeAskFishloreError(error);
         setMessages((prev) => [
           ...prev,
           { id: nextMessageId(), role: 'assistant', text: copy, timestamp: Date.now() },
@@ -189,7 +189,7 @@ export default function AskTidewireScreen() {
     return (
       <View style={[styles.container, styles.center]}>
         <Ionicons name="chatbubbles-outline" size={40} color="#007AFF" />
-        <Text style={styles.gateTitle}>Sign in to ask TideWire</Text>
+        <Text style={styles.gateTitle}>Sign in to ask Fishlore</Text>
         <Text style={styles.gateBody}>
           Your guide keeps its conversation per account, so it needs a signed-in session.
         </Text>
@@ -220,7 +220,7 @@ export default function AskTidewireScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Ask TideWire</Text>
+          <Text style={styles.headerTitle}>Ask Fishlore</Text>
           <Text style={styles.headerSubtitle}>Your regional fishing guide</Text>
         </View>
 
@@ -250,7 +250,7 @@ export default function AskTidewireScreen() {
             placeholderTextColor="#9ca3af"
             returnKeyType="send"
             onSubmitEditing={handleSubmit}
-            accessibilityLabel="Ask TideWire message input"
+            accessibilityLabel="Ask Fishlore message input"
           />
           <TouchableOpacity
             style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}

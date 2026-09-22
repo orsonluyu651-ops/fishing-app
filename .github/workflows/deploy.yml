@@ -1,0 +1,81 @@
+name: Pre-Flight Gating & EAS Production Deployment
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  validate-and-test:
+    name: Type Check & Unit Testing Matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Project Dependencies
+        run: npm ci
+
+      - name: Execute TypeScript Compiler Audit
+        run: npx tsc --noEmit
+
+      - name: Run Unit Test Suite
+        run: npm test
+
+  local-production-bundle-dry-run:
+    name: Metro Engine Multi-Platform Bundle Export
+    needs: validate-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Project Dependencies
+        run: npm ci
+
+      - name: Set Environment Production Mocks
+        run: cp .env.production .env
+
+      - name: Execute Metro Production Export (Hermes Gating)
+        run: npx expo export --platform all
+
+  eas-cloud-build-submission:
+    name: EAS Cloud Production Compile & Submit
+    needs: local-production-bundle-dry-run
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Project Dependencies
+        run: npm ci
+
+      - name: Setup Expo CLI Application Framework
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Trigger Remote EAS Production Cloud Build
+        run: npx eas build --profile production --platform all --non-interactive --auto-submit

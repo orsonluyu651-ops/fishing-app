@@ -66,10 +66,13 @@ jest.mock('@react-native-community/netinfo', () => {
 // for tests that never touch a photo. ──
 jest.mock('expo-file-system', () => {
   const contents = new Map(); // uri → marker
+  const legacyContents = new Map(); // uri → placeholder for legacy API
 
   class MockFileSystemNode {
     constructor(...args) {
-      const parts = args.filter((a) => typeof a === 'string' && a.length > 0);
+      const parts = args.map((a) =>
+        typeof a === 'string' ? a : a?.uri ?? String(a),
+      ).filter((s) => typeof s === 'string' && s.length > 0);
       this.uri = parts.length > 0 ? parts.join('/') : String(args[0]);
       this.exists = contents.has(this.uri);
     }
@@ -87,6 +90,13 @@ jest.mock('expo-file-system', () => {
       const target = typeof dest === 'string' ? dest : dest?.uri ?? String(dest);
       contents.set(target, 'copied');
     }
+    write(content) {
+      contents.set(this.uri, typeof content === 'string' ? content : 'binary');
+      this.exists = true;
+    }
+    async text() {
+      return contents.has(this.uri) ? String(contents.get(this.uri)) : '';
+    }
   }
 
   class MockDirectory extends MockFileSystemNode {
@@ -95,7 +105,12 @@ jest.mock('expo-file-system', () => {
       this.exists = true;
     }
     list() {
-      return [];
+      const prefix = `${this.uri}/`;
+      const out = [];
+      for (const key of contents.keys()) {
+        if (key.startsWith(prefix)) out.push(new MockFile(key));
+      }
+      return out;
     }
   }
 
@@ -107,5 +122,41 @@ jest.mock('expo-file-system', () => {
       cache: '/mock/cache',
       basename: (uri) => String(uri).split('/').pop() ?? '',
     },
+    documentDirectory: '/mock/documents/',
+    cacheDirectory: '/mock/cache/',
+    writeAsStringAsync: jest.fn(async () => undefined),
+    EncodingType: { UTF8: 'utf8' },
+    getInfoAsync: jest.fn(async (uri) => ({
+      exists: legacyContents.has(uri),
+      size: legacyContents.has(uri) ? 1024 : 0,
+    })),
+    makeDirectoryAsync: jest.fn(async (uri, _options) => {
+      legacyContents.set(uri, 'directory');
+      return undefined;
+    }),
+    downloadAsync: jest.fn(async (sourceUrl, destUri) => {
+      legacyContents.set(destUri, 'downloaded');
+      return { uri: destUri };
+    }),
   };
 });
+
+// ── expo-sharing: inert share dialog mock — always resolves successfully ──
+jest.mock('expo-sharing', () => ({
+  isAvailableAsync: jest.fn(async () => true),
+  shareAsync: jest.fn(async () => true),
+}));
+
+// ── expo-print: inert PDF renderer mock — returns a deterministic file URI ──
+jest.mock('expo-print', () => ({
+  printToFileAsync: jest.fn(async () => ({ uri: 'file:///mock-print/export.pdf' })),
+}));
+
+// ── expo-local-authentication: inert biometric hardware mock ──
+jest.mock('expo-local-authentication', () => ({
+  hasHardwareAsync: jest.fn(async () => true),
+  isEnrolledAsync: jest.fn(async () => true),
+  supportedAuthenticationTypesAsync: jest.fn(async () => [1]),
+  authenticateAsync: jest.fn(async () => ({ success: false, type: null })),
+  AuthenticationType: { FACE_ID: 1, TOUCH_ID: 2, FINGERPRINT: 3, IRIS: 4, BIOOMETRIC: 5 },
+}));

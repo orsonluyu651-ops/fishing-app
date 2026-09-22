@@ -1,7 +1,7 @@
 /**
  * Premium Access Controller
  *
- * Provides hooks and feature-gate guards for the fishing-app premium
+ * Provides hooks and feature-gate guards for the Fishlore premium
  * subscription system. Uses Supabase to check the signed-in user's
  * profile table for an `is_pro` boolean flag.
  *

@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { lookupQldRule, evaluateRule } from './rules';
 
 // ────────────────────────────────────────────────────────────────
-// Ask Tidewire — the local curated fishing guide (V1.1).
+// Ask Fishlore — the local curated fishing guide (V1.1).
 //
 // This is NOT a language model. It is a deterministic answer engine:
 //   * every regulatory figure (min/max size, bag limits) is read LIVE from
@@ -562,7 +562,7 @@ export async function askAssistant(query: string): Promise<AssistantAnswer> {
       followUps: g.id === 'rules-overview'
         ? ['What size can I keep a whiting?', SUGGESTIONS[0], SUGGESTIONS[4]]
         : [SUGGESTIONS[0], SUGGESTIONS[1], 'What rig should I use?'],
-      sources: [{ label: 'Tidewire community guide' }],
+      sources: [{ label: 'Fishlore community guide' }],
     };
   }
 

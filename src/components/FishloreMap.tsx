@@ -17,7 +17,7 @@ import { usePremiumStatus } from '@/lib/premiumAccess';
 import { PremiumPaywall } from '@/components/PremiumPaywall';
 
 // ════════════════════════════════════════════════════════════
-// TidewireMap — the Guide tab's interactive OSM map with an
+// FishloreMap — the Guide tab's interactive OSM map with an
 // offline tile cache.
 //
 // ONLINE  : UrlTile renders the remote OSM template, and a debounced
@@ -62,7 +62,7 @@ interface CacheProgress {
   total: number;
 }
 
-export default function TidewireMap() {
+export default function FishloreMap() {
   const mapRef = useRef<MapView | null>(null);
   const [isOnline, setIsOnline] = useState(true);
   const [activeSpot, setActiveSpot] = useState<Hotspot>(HOTSPOTS[0]);
@@ -196,7 +196,7 @@ export default function TidewireMap() {
     } catch (error) {
       // The range downloader traps per-tile errors, so reaching here means
       // something unusual — still never allowed to crash the map.
-      console.warn('[TidewireMap] region cache run failed:', error);
+      console.warn('[FishloreMap] region cache run failed:', error);
       showStatus('Could not cache this region — check your connection and retry.');
     } finally {
       setProgress(null);

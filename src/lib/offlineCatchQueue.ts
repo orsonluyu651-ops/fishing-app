@@ -1,6 +1,10 @@
 import { File, Directory, Paths } from 'expo-file-system';
 import { supabase } from './supabase';
 import { traceStorageOperation } from './perfMonitor';
+import type {
+  ConflictResolutionStrategy,
+  ReconcileResult,
+} from './offlineQueueMutation';
 
 // Offline catch queue: when a log submission fails with a network error out
 // on the water, the payload (+ persistent photo copy) is saved and synced
@@ -522,9 +526,182 @@ export function uploadQueuedCatch(entry: QueuedCatch): Promise<string> {
   return withQueueLock(() => uploadQueuedCatchUnlocked(entry));
 }
 
+/**
+ * Fetch the server-side row for a queued entry via its dedupe key
+ * (`client_queue_id`). Returns null when there is no remote row yet (pure
+ * insert — no collision possible), when the entry predates UUID dedupe
+ * keys, or when the lookup itself fails (fail-open: the upsert still runs).
+ */
+export async function fetchRemoteCatchSnapshot(
+  entry: QueuedCatch,
+): Promise<RemoteCatchSnapshot | null> {
+  if (!CLIENT_QUEUE_ID_PATTERN.test(entry.id)) return null;
+  try {
+    const { data, error } = await supabase
+      .from('catches')
+      .select('id,species,length,media_path,environmental,captured_at,updated_at,client_queue_id')
+      .eq('client_queue_id', entry.id)
+      .maybeSingle();
+    if (error || !data) return null;
+    const row = data as Record<string, any>;
+    const env = (row.environmental ?? {}) as Record<string, any>;
+    return {
+      id: String(row.id ?? ''),
+      species: (row.species as string | null) ?? null,
+      length: (row.length as number | null) ?? null,
+      latitude: typeof env.latitude === 'number' ? env.latitude : null,
+      longitude: typeof env.longitude === 'number' ? env.longitude : null,
+      photoUri: (row.media_path as string | null) ?? null,
+      createdAt: (row.captured_at as string | null) ?? null,
+      updatedAt: ((row.updated_at ?? row.captured_at) as string | null) ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Map a remote snapshot onto the Partial<QueuedCatch> shape the reconciler expects. */
+export function remoteSnapshotToPartial(remote: RemoteCatchSnapshot): Partial<QueuedCatch> {
+  return {
+    id: remote.id,
+    species: remote.species ?? '',
+    length: remote.length ?? null,
+    latitude: remote.latitude ?? null,
+    longitude: remote.longitude ?? null,
+    photoUri: remote.photoUri ?? null,
+    createdAt: remote.createdAt ?? '',
+    attempts: 0,
+  };
+}
+
+/**
+ * Timestamp-collision check: true when the server row carries an `updatedAt`
+ * differing from the local `createdAt` baseline. Missing timestamps fail
+ * open (no collision) so legacy rows never false-positive.
+ */
+export function hasTimestampCollision(
+  localEntry: QueuedCatch,
+  remote: RemoteCatchSnapshot | null,
+): boolean {
+  if (!remote) return false;
+  if (!remote.updatedAt) return false;
+  if (!localEntry.createdAt) return false;
+  return remote.updatedAt !== localEntry.createdAt;
+}
+
+/**
+ * Probe for a collision without mutating anything. Returns the trapped
+ * conflict when a remote row exists with a mismatched timestamp, else null.
+ */
+export async function detectCatchConflict(entry: QueuedCatch): Promise<CatchConflict | null> {
+  const remote = await fetchRemoteCatchSnapshot(entry);
+  if (!hasTimestampCollision(entry, remote)) return null;
+  const snapshot = remote as RemoteCatchSnapshot;
+  return {
+    localEntry: entry,
+    remoteSnapshot: snapshot,
+    remoteAsPartial: remoteSnapshotToPartial(snapshot),
+  };
+}
+
+/** True when an upsert rejection is a uniqueness collision (409 / PG 23505). */
+export function isConflictError(error: any): boolean {
+  const status = getErrorStatus(error);
+  if (status === 409) return true;
+  const code = String((error as any)?.code ?? '');
+  return code === '23505';
+}
+
+/**
+ * Route a trapped conflict through reconcileCatchConflict() and apply the
+ * resulting localAction (caller must hold the queue lock):
+ * - keep (client-wins): leave the entry; caller proceeds to upsert.
+ * - remove (server-wins): drop the queue entry + cached photo.
+ * - update (merge-fields): write merged fields back into the queue;
+ *   caller proceeds to upsert the merged row.
+ */
+export async function reconcileAndApplyCatchConflict(
+  conflict: CatchConflict,
+  strategy: ConflictResolutionStrategy,
+): Promise<ReconcileResult> {
+  // Lazy require avoids the static cycle:
+  // offlineQueueMutation imports withQueueLock/readQueue/writeQueue from here.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { reconcileCatchConflict } = require('./offlineQueueMutation') as typeof import('./offlineQueueMutation');
+  const result = reconcileCatchConflict(conflict.localEntry, conflict.remoteAsPartial, strategy);
+  if (result.localAction === 'remove') {
+    await removeFromQueue(conflict.localEntry.id);
+    deleteQueuedPhotoFiles(conflict.localEntry.id, conflict.localEntry.photoUri);
+  } else if (result.localAction === 'update') {
+    const queue = await readQueue();
+    const idx = queue.findIndex((item) => item.id === conflict.localEntry.id);
+    if (idx >= 0) {
+      queue[idx] = {
+        ...queue[idx]!,
+        ...(result.resolvedCatch as Partial<QueuedCatch>),
+        id: conflict.localEntry.id,
+        userId: conflict.localEntry.userId,
+        attempts: 0,
+      };
+      await writeQueue(queue);
+    }
+  }
+  return result;
+}
+
 export interface SyncResult {
   synced: number;
   failed: number;
+}
+
+/** Minimal remote snapshot used only for collision detection. */
+export interface RemoteCatchSnapshot {
+  id: string;
+  species?: string | null;
+  length?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  photoUri?: string | null;
+  createdAt?: string | null;
+  /** Server `updated_at` (or `captured_at` fallback) — collision signal. */
+  updatedAt?: string | null;
+}
+
+/** A trapped collision awaiting a resolution rule. */
+export interface CatchConflict {
+  localEntry: QueuedCatch;
+  remoteSnapshot: RemoteCatchSnapshot;
+  remoteAsPartial: Partial<QueuedCatch>;
+}
+
+/** Resolution requested by the visual picker / caller hook. */
+export type ConflictDecision = ConflictResolutionStrategy | 'defer';
+
+/**
+ * Hook invoked when a collision is trapped and no static strategy was
+ * supplied. Return a strategy to resolve now, or `'defer'` (or null) to
+ * suspend the loop for that row so the picker overlay can ask the angler.
+ */
+export type ConflictDecisionHook = (
+  conflict: CatchConflict,
+) => ConflictDecision | null | undefined | Promise<ConflictDecision | null | undefined>;
+
+/** Module-level shelf for deferred conflicts surfaced to the picker UI. */
+let pendingCatchConflicts: CatchConflict[] = [];
+
+/** Conflicts deferred via `'defer'` — the picker overlay drains this. */
+export function getPendingCatchConflicts(): CatchConflict[] {
+  return [...pendingCatchConflicts];
+}
+
+/** Remove one deferred conflict once the angler has resolved it. */
+export function clearPendingCatchConflict(id: string): void {
+  pendingCatchConflicts = pendingCatchConflicts.filter((c) => c.localEntry.id !== id);
+}
+
+/** Test/shutdown helper — drops every deferred conflict. */
+export function clearPendingCatchConflicts(): void {
+  pendingCatchConflicts = [];
 }
 
 /** Entries belonging to one user. Single source of truth for the scoping rule. */
@@ -541,6 +718,33 @@ export interface SyncQueueOptions {
    * retry passes true to give those entries another chance.
    */
   includeFailed?: boolean;
+  /**
+   * Opt-in pre-upsert conflict probe. When true, syncQueue fetches the remote
+   * row for each dedupe-capable entry and routes timestamp collisions through
+   * `reconcileCatchConflict()` before the `.upsert()`. Off by default so the
+   * hot path spends zero extra round trips.
+   */
+  checkConflicts?: boolean;
+  /**
+   * Static resolution rule applied to every trapped collision. When omitted,
+   * `onConflict` (or the deferred picker shelf) decides per row.
+   */
+  conflictStrategy?: ConflictResolutionStrategy;
+  /**
+   * Per-row hook for collisions: return a strategy to resolve immediately,
+   * or 'defer'/null to suspend the loop for that row and surface it to the
+   * `CatchConflictPicker` overlay via `getPendingCatchConflicts()`.
+   */
+  onConflict?: ConflictDecisionHook;
+  /**
+   * Opt-in chaos injection (tests only). When true, every Supabase-bound
+   * call in this pass — conflict probes and row upserts — runs through
+   * `executeMockNetworkCall()` under the armed `setChaosProfile()`.
+   * Synthetic drops surface as transient network errors: the row is kept
+   * with attempts +1 so the next pass re-queues it naturally. Off by
+   * default; production never enables this.
+   */
+  simulateChaos?: boolean;
 }
 
 /**
@@ -559,10 +763,16 @@ export function syncQueue(
   currentUserId: string,
   options: SyncQueueOptions = {},
 ): Promise<SyncResult> {
-  const { includeFailed = false } = options;
+  const { includeFailed = false, checkConflicts = false, conflictStrategy, onConflict, simulateChaos = false } = options;
   if (!currentUserId) return Promise.resolve({ synced: 0, failed: 0 });
 
   return withQueueLock(async () => {
+    // Chaos wrapper is resolved lazily (syncChaosEngine imports nothing from
+    // here, but lazy keeps the hot path free of any overhead when disabled).
+    const { executeMockNetworkCall } = simulateChaos
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      ? (require('./syncChaosEngine') as typeof import('./syncChaosEngine'))
+      : { executeMockNetworkCall: <T>(fn: () => Promise<T>) => fn() };
     const queue = await readQueue();
     const targets = pendingForUser(queue, currentUserId);
 
@@ -580,8 +790,51 @@ export function syncQueue(
       // (includeFailed) re-attempts them.
       if (!includeFailed && isFailedEntry(entry)) continue;
 
+      // ── Sync conflict interceptor (opt-in via checkConflicts) ──
+      // Before the standard .upsert(), fetch the remote row and compare
+      // timestamps. A mismatch means the record was modified both locally
+      // and on the server while offline — route it through
+      // reconcileCatchConflict() with the selected resolution rule.
+      // Unset strategy + no hook decision suspends the loop for that row:
+      // the conflict is shelved for the CatchConflictPicker overlay and
+      // the entry is re-queued untouched.
+      if (checkConflicts) {
+        let trapped: CatchConflict | null = null;
+        try {
+          trapped = await executeMockNetworkCall(() => detectCatchConflict(entry));
+        } catch (error) {
+          // Chaos-injected drop on the probe: treat as transient — keep the
+          // row with attempts +1 so the next pass re-queues it naturally.
+          console.error(`Error syncing queued catch ${entry.id}:`, error);
+          await bumpAttempts(entry.id);
+          failed += 1;
+          continue;
+        }
+        if (trapped) {
+          let decision: ConflictDecision | null | undefined = conflictStrategy;
+          if (!decision && onConflict) {
+            decision = await onConflict(trapped);
+          }
+          if (!decision || decision === 'defer') {
+            if (!pendingCatchConflicts.some((c) => c.localEntry.id === trapped.localEntry.id)) {
+              pendingCatchConflicts.push(trapped);
+            }
+            continue;
+          }
+          const applied = await reconcileAndApplyCatchConflict(trapped, decision);
+          if (applied.localAction === 'remove') {
+            // server-wins: adopted the backend version — counts as synced.
+            clearPendingCatchConflict(trapped.localEntry.id);
+            synced += 1;
+            continue;
+          }
+          clearPendingCatchConflict(trapped.localEntry.id);
+          // keep/update: fall through to the upsert with resolved fields.
+        }
+      }
+
       try {
-        await uploadQueuedCatchUnlocked(entry);
+        await executeMockNetworkCall(() => uploadQueuedCatchUnlocked(entry));
         synced += 1;
       } catch (error) {
         console.error(`Error syncing queued catch ${entry.id}:`, error);
@@ -596,6 +849,26 @@ export function syncQueue(
       }
     }
     return { synced, failed };
+  });
+}
+
+/**
+ * Resolve one deferred conflict from the picker overlay (takes the queue
+ * lock): applies the chosen strategy transactionally, drops the shelf entry,
+ * and — for keep/update — re-queues the sync task by leaving the (possibly
+ * merged) entry in place so the next `syncQueue()` pass uploads it.
+ * Returns null when the conflict is no longer pending.
+ */
+export function resolvePendingCatchConflict(
+  conflictId: string,
+  decision: ConflictResolutionStrategy,
+): Promise<ReconcileResult | null> {
+  return withQueueLock(async () => {
+    const conflict = pendingCatchConflicts.find((c) => c.localEntry.id === conflictId);
+    if (!conflict) return null;
+    const result = await reconcileAndApplyCatchConflict(conflict, decision);
+    clearPendingCatchConflict(conflictId);
+    return result;
   });
 }
 

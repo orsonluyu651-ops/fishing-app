@@ -202,6 +202,103 @@ export function compileCatchAnalytics(catches: RawCatchRecord[]): CatchAnalytics
     catchDateRange,
   };
 }
+
+// ── Catch history analytics (weight-frequency + spatial aggregation) ──────────
+
+import { CatchRecord } from './exportEngine';
+
+export interface SpeciesMetric {
+  species: string;
+  count: number;
+  totalWeight: number;
+  averageWeight: number;
+}
+
+export interface MonthlyTrendMetric {
+  monthYear: string; // Format "MM/YYYY"
+  count: number;
+}
+
+export interface AnglerProfileAnalytics {
+  totalCatchesCount: number;
+  allTimeWeightLbs: number;
+  favoriteLocation: string;
+  speciesDistribution: SpeciesMetric[];
+  monthlyTrends: MonthlyTrendMetric[];
+}
+
+/**
+ * Iterates through raw history rows to compile aggregated spatial and volumetric analytics.
+ */
+export function processAnglerCatchAnalytics(records: CatchRecord[]): AnglerProfileAnalytics {
+  if (!records || records.length === 0) {
+    return { totalCatchesCount: 0, allTimeWeightLbs: 0, favoriteLocation: 'None', speciesDistribution: [], monthlyTrends: [] };
+  }
+
+  let allTimeWeightLbs = 0;
+  const locationCounts: Record<string, number> = {};
+  const speciesMap: Record<string, { count: number; weight: number }> = {};
+  const monthlyMap: Record<string, number> = {};
+
+  records.forEach((record) => {
+    allTimeWeightLbs += record.weight;
+
+    // Aggregate geographical preference indexes
+    locationCounts[record.location_name] = (locationCounts[record.location_name] || 0) + 1;
+
+    // Aggregate biological group metrics
+    if (!speciesMap[record.species]) {
+      speciesMap[record.species] = { count: 0, weight: 0 };
+    }
+    speciesMap[record.species].count += 1;
+    speciesMap[record.species].weight += record.weight;
+
+    // Aggregate chronological monthly trends
+    const date = new Date(record.created_at);
+    const monthYear = `${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+    monthlyMap[monthYear] = (monthlyMap[monthYear] || 0) + 1;
+  });
+
+  // Calculate favorite waterway signature
+  let favoriteLocation = 'None';
+  let maxLocationCount = 0;
+  Object.entries(locationCounts).forEach(([loc, cnt]) => {
+    if (cnt > maxLocationCount) {
+      maxLocationCount = cnt;
+      favoriteLocation = loc;
+    }
+  });
+
+  // Map species arrays
+  const speciesDistribution: SpeciesMetric[] = Object.entries(speciesMap)
+    .map(([species, data]) => ({
+      species,
+      count: data.count,
+      totalWeight: data.weight,
+      averageWeight: data.weight / data.count,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  // Map chronology trends sorted descending by calendar order
+  const monthlyTrends: MonthlyTrendMetric[] = Object.entries(monthlyMap)
+    .map(([monthYear, count]) => ({
+      monthYear,
+      count,
+    }))
+    .sort((a, b) => {
+      const [aM, aY] = a.monthYear.split('/').map(Number);
+      const [bM, bY] = b.monthYear.split('/').map(Number);
+      return bY !== aY ? bY - aY : bM - aM;
+    });
+
+  return {
+    totalCatchesCount: records.length,
+    allTimeWeightLbs,
+    favoriteLocation,
+    speciesDistribution,
+    monthlyTrends,
+  };
+}
 /**
  * Moon phase distribution data point.
  */
