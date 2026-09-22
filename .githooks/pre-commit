@@ -1,0 +1,38 @@
+#!/bin/bash
+set -e
+
+# ── Gate 1: Environment presence (cheap fail first) ──────────────
+if [ ! -f .env.production ]; then
+  echo "[PRE-COMMIT LOCK] Missing .env.production — commit rejected." >&2
+  exit 1
+fi
+
+# ── Gate 2: Type check ───────────────────────────────────────────
+echo "[PRE-COMMIT LOCK] Running type verification (npx tsc --noEmit)..."
+npx tsc --noEmit
+
+# ── Gate 3: Test suite with dynamic vector extraction ────────────
+# jest exit code is the verdict; machine-readable results file supplies
+# the live counts so the banner always scales with the suite (no
+# hardcoded totals). --outputFile avoids npm/jest stdout interleaving
+# that corrupts inline --json parsing.
+echo "[PRE-COMMIT LOCK] Running test suite..."
+set +e
+TEST_OUT=$(npm test -- --json --outputFile=.jest-precommit.json --watchAll=false 2>&1)
+TEST_EXIT=$?
+set -e
+
+if [ "$TEST_EXIT" -ne 0 ]; then
+  echo "[PRE-COMMIT LOCK] Test suite failed (exit $TEST_EXIT) — commit rejected." >&2
+  echo "$TEST_OUT" | grep -E "✕|✗|FAIL" | head -20 >&2 || true
+  rm -f .jest-precommit.json
+  exit 1
+fi
+
+PASSED=$(jq '.numPassedTests // "unknown"' .jest-precommit.json 2>/dev/null || echo "unknown")
+TOTAL=$(jq '.numTotalTests // "unknown"' .jest-precommit.json 2>/dev/null || echo "unknown")
+rm -f .jest-precommit.json
+
+echo "================================================================="
+echo "  [PRE-COMMIT LOCK] Verified: $PASSED / $TOTAL Test Vectors Pass"
+echo "================================================================="
