@@ -24,6 +24,32 @@ if (Platform.OS === 'web') {
   if (!globalAny.ExpoNotifications.getLastNotificationResponse) {
     globalAny.ExpoNotifications.getLastNotificationResponse = async () => null;
   }
+  if (!globalAny.ExpoNotifications.getLastNotificationResponseAsync) {
+    globalAny.ExpoNotifications.getLastNotificationResponseAsync = async () => null;
+  }
+  // Push token fetcher stubs: Safari has no native ExpoNotifications container.
+  // Mock-stubbing the fetchers short-circuits registerForPushNotificationsAsync
+  // with clean resolved values instead of UnavailabilityError rejections.
+  if (!globalAny.ExpoNotifications.getPermissionsAsync) {
+    globalAny.ExpoNotifications.getPermissionsAsync = async () => ({
+      status: 'granted', granted: true, canAskAgain: false, expires: 'never',
+    });
+  }
+  if (!globalAny.ExpoNotifications.requestPermissionsAsync) {
+    globalAny.ExpoNotifications.requestPermissionsAsync = async () => ({
+      status: 'granted', granted: true, canAskAgain: false, expires: 'never',
+    });
+  }
+  if (!globalAny.ExpoNotifications.getExpoPushTokenAsync) {
+    globalAny.ExpoNotifications.getExpoPushTokenAsync = async () => ({
+      data: 'ExponentPushToken[web-session-stub]', type: 'expo',
+    });
+  }
+  if (!globalAny.ExpoNotifications.getDevicePushTokenAsync) {
+    globalAny.ExpoNotifications.getDevicePushTokenAsync = async () => ({
+      data: 'web-session-device-stub', type: 'web',
+    });
+  }
 }
 
 // Intercept unhandled global native promise rejections safely

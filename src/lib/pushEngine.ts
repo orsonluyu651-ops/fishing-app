@@ -1,10 +1,14 @@
 import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
 import { supabase } from './supabase';
 
 /**
  * Validates local operating layout access permissions and binds the active target device push token back to Supabase.
  */
 export async function registerForPushNotificationsAsync(userId: string): Promise<string | null> {
+  // Safari/web has no native push container — short-circuit cleanly before
+  // any token registry call so no UnavailabilityError can surface in console.
+  if (Platform.OS === 'web') return null;
   try {
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
