@@ -15,6 +15,14 @@ import {
   zoomForRegion,
 } from '../../src/lib/mapTileCache';
 import { countCachedTiles } from '@/lib/mapTileCache';
+import { getOfflineCatchPins } from '@/lib/offlineDatabase';
+export type OfflineCatchPin = {
+  id: string;
+  species: string;
+  location_name: string;
+  latitude: number;
+  longitude: number;
+};
 import { usePremiumStatus } from '@/lib/premiumAccess';
 import { PremiumPaywall } from '@/components/PremiumPaywall';
 import {
@@ -102,14 +110,30 @@ export default function FishloreMap() {
   const mapRef = useRef<MapView | null>(null);
   const [isOnline, setIsOnline] = useState(true);
   const [activeSpot, setActiveSpot] = useState<Hotspot>(HOTSPOTS[0]);
+  const [offlinePins, setOfflinePins] = useState<OfflineCatchPin[]>([]);
   const [region, setRegion] = useState(GOLD_COAST_REGION);
   const [progress, setProgress] = useState<CacheProgress | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
-  // Quadtree query output — the point set actually rendered this frame.
+    // Quadtree query output — the point set actually rendered this frame.
   // Seeded with the full dataset so the first paint matches the pre-quadtree
   // behavior; every region settle re-narrows it via queryViewport.
   const [visiblePoints, setVisiblePoints] = useState<GeoPoint[]>(HOTSPOT_POINTS);
+
+  // Pull cached offline catch pins once so the map renders logged locations
+  // even when the device has no signal. Mirrors the live hotspot markers
+  // (same coordinate tuple contract) so the existing Marker layer renders them
+  // without any JSX changes.
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const pins = await getOfflineCatchPins();
+      if (active) setOfflinePins(pins);
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const buttonAbortRef = useRef<AbortController | null>(null);
   const prefetchAbortRef = useRef<AbortController | null>(null);
@@ -291,7 +315,7 @@ export default function FishloreMap() {
             tileCachePath={getUrlTileCacheDirUri()}
             tileCacheMaxAge={URL_TILE_CACHE_MAX_AGE_SECONDS}
           />
-          {HOTSPOTS.filter((spot) => visiblePointIds.has(spot.id)).map((spot) => (
+                    {HOTSPOTS.filter((spot) => visiblePointIds.has(spot.id)).map((spot) => (
             <Marker
               key={spot.id}
               coordinate={{ latitude: spot.latitude, longitude: spot.longitude }}
@@ -299,6 +323,15 @@ export default function FishloreMap() {
               description={`Target: ${spot.fish}`}
               pinColor={spot.id === activeSpot.id ? '#007AFF' : '#e11d48'}
               onPress={() => setActiveSpot(spot)}
+            />
+          ))}
+          {offlinePins.map((pin) => (
+            <Marker
+              key={`catch-${pin.id}`}
+              coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
+              title={pin.species}
+              description={`Landed at ${pin.location_name} • Tap for details`}
+              pinColor="#0284c7"
             />
           ))}
         </MapView>

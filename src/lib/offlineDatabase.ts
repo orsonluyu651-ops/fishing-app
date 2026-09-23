@@ -26,19 +26,67 @@ export const initOfflineDatabase = async (): Promise<void> => {
     nativeDb = await SQLite.openDatabaseAsync('fishlore_offline.db');
     await nativeDb.execAsync(`
       PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS offline_catches (
+            CREATE TABLE IF NOT EXISTS offline_catches (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         species TEXT NOT NULL,
         weight TEXT,
         length TEXT,
         location_name TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
-        synced INTEGER DEFAULT 0
+        synced INTEGER DEFAULT 0,
+        latitude REAL,
+        longitude REAL
       );
+    `);
+    // Idempotent schema guard: add geo columns to databases seeded before the
+    // columns existed. ALTER TABLE IF EXISTS skips the migration on fresh files.
+    await nativeDb.execAsync(`
+      ALTER TABLE offline_catches ADD COLUMN latitude REAL;
+      ALTER TABLE offline_catches ADD COLUMN longitude REAL;
     `);
     console.log('💾 Storage Engine: Native expo-sqlite Container Formatted.');
   } catch (error) {
     console.error('Offline DB Initialization failure:', error);
+  }
+};
+
+export const getOfflineCatchPins = async (): Promise<
+  Array<{ id: string; species: string; location_name: string; latitude: number; longitude: number }>
+> => {
+  if (Platform.OS === 'web') {
+    // Web fallback mirrors the localStorage cache; geo pins may not be present
+    // in the lightweight seed model, so return the subset that has coordinates.
+    try {
+      const raw = localStorage.getItem('fishlore_web_catches') || '[]';
+      return JSON.parse(raw)
+        .filter((item: any) => item.latitude != null && item.longitude != null)
+        .map((item: any) => ({
+          id: String(item.id),
+          species: item.species,
+          location_name: item.location_name,
+          latitude: item.latitude,
+          longitude: item.longitude,
+        }));
+    } catch {
+      return [];
+    }
+  }
+
+  if (!nativeDb) return [];
+  try {
+    const rows = await nativeDb.getAllAsync(
+      'SELECT id, species, location_name, latitude, longitude FROM offline_catches WHERE latitude IS NOT NULL AND longitude IS NOT NULL;',
+    );
+    return (rows || []).map((row: any) => ({
+      id: String(row.id),
+      species: row.species,
+      location_name: row.location_name,
+      latitude: row.latitude,
+      longitude: row.longitude,
+    }));
+  } catch (error) {
+    console.error('Failed to read offline catch pins:', error);
+    return [];
   }
 };
 
