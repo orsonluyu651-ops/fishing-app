@@ -9,6 +9,7 @@ import { registerBackgroundCatchSync } from '../src/lib/backgroundSync';
 import { parseAndVerifySpotLink } from '../src/lib/spotSharingEngine';
 import { UpdateBoundary } from '../src/components/UpdateBoundary';
 import { TelemetryBoundary } from '../src/components/TelemetryBoundary';
+import { StripeRoot } from '../src/components/StripeRoot';
 import { reportNativeCrash } from '../src/lib/telemetryEngine';
 
 // Web polyfill: expo-router's notification routing calls
@@ -122,14 +123,19 @@ export default function RootLayout() {
   return (
     <TelemetryBoundary>
       <UpdateBoundary>
-        <View style={styles.rootContainer}>
-          <Slot />
-          {loading && (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#007AFF" />
-            </View>
-          )}
-        </View>
+        {/* Stripe root: mounts StripeProvider with EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY
+            on native; transparent pass-through on web (platform-extension resolved —
+            this file must never import @stripe/stripe-react-native directly). */}
+        <StripeRoot>
+          <View style={styles.rootContainer}>
+            <Slot />
+            {loading && (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#007AFF" />
+              </View>
+            )}
+          </View>
+        </StripeRoot>
       </UpdateBoundary>
     </TelemetryBoundary>
   );
