@@ -74,7 +74,7 @@ module.exports = {
         'READ_MEDIA_IMAGES',
       ],
       adaptiveIcon: {
-        foregroundImage: './assets/adaptive-icon.png',
+        foregroundImage: './assets/adaptive-icon-safe.png',
         backgroundColor: '#ffffff',
       },
       // react-native-maps Android base map credential — injected from the
