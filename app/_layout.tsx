@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, ErrorUtils, StyleSheet, View, Alert } from 'react-native';
 import { Slot, useRouter, useSegments } from 'expo-router';
@@ -9,6 +10,19 @@ import { parseAndVerifySpotLink } from '../src/lib/spotSharingEngine';
 import { UpdateBoundary } from '../src/components/UpdateBoundary';
 import { TelemetryBoundary } from '../src/components/TelemetryBoundary';
 import { reportNativeCrash } from '../src/lib/telemetryEngine';
+
+// Web polyfill: expo-router's notification routing calls
+// `ExpoNotifications.getLastNotificationResponse`, which has no web
+// implementation. Neutralise it before any provider mounts.
+if (Platform.OS === 'web') {
+  const globalAny = globalThis as unknown as Record<string, unknown> & {
+    ExpoNotifications?: Record<string, unknown>;
+  };
+  if (!globalAny.ExpoNotifications) globalAny.ExpoNotifications = {};
+  if (!globalAny.ExpoNotifications.getLastNotificationResponse) {
+    globalAny.ExpoNotifications.getLastNotificationResponse = async () => null;
+  }
+}
 
 // Intercept unhandled global native promise rejections safely
 if (!__DEV__) {
@@ -65,13 +79,14 @@ export default function RootLayout() {
 
   // Notification engine: route banner taps to their in-app deep links
   // (warm taps and cold-start responses both). Returns its own cleanup.
-  useEffect(
-    () =>
-      attachNotificationRouting((href) => {
-        void router.push(href);
-      }),
-    [router],
-  );
+  // Web: expo-notifications exposes no getLastNotificationResponse — skip
+  // routing entirely (polyfilled at module top as belt-and-braces).
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    return attachNotificationRouting((href) => {
+      void router.push(href);
+    });
+  }, [router]);
 
   // Background catch sync: register the OS background-fetch cycle (strict
   // 15-minute minimum interval) so the offline catch queue drains while the

@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
+import { Platform } from 'react-native';
 import { useStripePayment } from '@/lib/stripePayment';
 
 interface PremiumPaywallProps {
@@ -87,6 +88,12 @@ export function PremiumPaywall({ onUpgradeSuccess, onClose }: PremiumPaywallProp
 
   return (
     <View style={styles.card}>
+      {Platform.OS === 'web' ? (
+        <View style={styles.header}>
+          <Text style={styles.title}>Pro Membership</Text>
+          <Text style={styles.subtitle}>Payments unavailable on web</Text>
+        </View>
+      ) : null}
       {onClose ? (
         <TouchableOpacity style={styles.closeButton} onPress={onClose} disabled={isProcessing}>
           <Ionicons name="close" size={24} color="#6b7280" />

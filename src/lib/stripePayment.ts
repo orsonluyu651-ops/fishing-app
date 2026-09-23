@@ -7,12 +7,19 @@
  */
 
 import { useState, useCallback } from 'react';
-import {
-  initPaymentSheet,
-  presentPaymentSheet,
-} from '@stripe/stripe-react-native';
 import { Platform } from 'react-native';
 import { supabase } from './supabase';
+
+// Web-safe lazy binding for the native Stripe SDK.
+//
+// Metro statically follows every `require('...')` string, so even a
+// `Platform.OS === 'web'`-guarded require of '@stripe/stripe-react-native'
+// pulls `codegenNativeCommands` / `codegenNativeComponent` into the web
+// graph and 500s `platform=web` bundles. Only the `.native` module may
+// touch the SDK; the `.ts` entry stays dependency-free and returns the
+// deterministic web-unavailable result.
+
+export const STRIPE_WEB_UNAVAILABLE = 'Payments unavailable on web';
 
 /**
  * Stripe configuration options.
@@ -36,59 +43,15 @@ export interface PaymentSheetResult {
  * Initialize the Stripe Payment Sheet for a given user and price.
  */
 export async function initializeStripePaymentSheet(
-  userId: string,
-  priceId: string,
-  customerId?: string
+  _userId: string,
+  _priceId: string,
+  _customerId?: string
 ): Promise<PaymentSheetResult> {
-  try {
-    const { data, error } = await supabase.functions.invoke('stripe-checkout', {
-      body: { userId, priceId, customerId, type: 'payment_sheet' },
-    });
-
-    if (error) {
-      console.error('Stripe checkout function error:', error);
-      return { success: false, error: error.message || 'Failed to initialize payment sheet' };
-    }
-
-    const { clientSecret, customer, ephemeralKey } = data as {
-      clientSecret: string;
-      customer: string;
-      ephemeralKey: string;
-    };
-
-    if (!clientSecret || !customer || !ephemeralKey) {
-      return { success: false, error: 'Invalid response from Stripe checkout' };
-    }
-
-    // Initialize the payment sheet
-    const initResult = await initPaymentSheet({
-      paymentIntentClientSecret: clientSecret,
-      customerId: customer,
-      merchantDisplayName: 'Fishing App',
-    });
-
-    if (initResult.error) {
-      console.error('Payment sheet init error:', initResult.error);
-      return { success: false, error: initResult.error.message || 'Payment sheet initialization failed' };
-    }
-
-    // Present the payment sheet
-    const presentResult = await presentPaymentSheet();
-
-    if (presentResult.error) {
-      console.error('Payment sheet present error:', presentResult.error);
-      return { success: false, error: presentResult.error.message || 'Payment sheet presentation failed' };
-    }
-
-    if (presentResult.didCancel) {
-      return { success: false, error: 'Payment cancelled by user' };
-    }
-
-    return { success: true, customerId: customer };
-  } catch (err) {
-    console.error('initializeStripePaymentSheet failed:', err);
-    return { success: false, error: err instanceof Error ? err.message : 'An unexpected error occurred' };
-  }
+  // Web entry: native SDK lives in `stripePayment.native.ts` (platform
+  // extension resolution). Never require it here.
+  void _userId; void _priceId; void _customerId;
+  void Platform.OS;
+  return { success: false, error: STRIPE_WEB_UNAVAILABLE };
 }
 
 /**
