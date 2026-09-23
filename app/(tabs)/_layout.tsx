@@ -7,6 +7,7 @@ export default function TabsLayout() {
     <Tabs screenOptions={{ tabBarActiveTintColor: '#0284c7', headerStyle: { backgroundColor: '#fff' } }}>
       <Tabs.Screen name="feed" options={{ title: 'Feed', tabBarIcon: ({ color }) => <Ionicons name="newspaper-outline" size={24} color={color} /> }} />
       <Tabs.Screen name="guide" options={{ title: 'Guide', tabBarIcon: ({ color }) => <Ionicons name="book-outline" size={24} color={color} /> }} />
+      <Tabs.Screen name="fishtok" options={{ title: 'Fish-Tok', tabBarIcon: ({ color }) => <Ionicons name="play-circle-outline" size={24} color={color} /> }} />
       <Tabs.Screen name="notifications" options={{ title: 'Alerts', tabBarIcon: ({ color }) => <Ionicons name="notifications-outline" size={24} color={color} /> }} />
       <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={24} color={color} /> }} />
     </Tabs>
