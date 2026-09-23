@@ -11,6 +11,7 @@ import { UpdateBoundary } from '../src/components/UpdateBoundary';
 import { TelemetryBoundary } from '../src/components/TelemetryBoundary';
 import { StripeRoot } from '../src/components/StripeRoot';
 import { reportNativeCrash } from '../src/lib/telemetryEngine';
+import { initOfflineDatabase } from '../src/lib/offlineDatabase';
 
 // Web polyfill: expo-router's notification routing calls
 // `ExpoNotifications.getLastNotificationResponse`, which has no web
@@ -95,6 +96,13 @@ export default function RootLayout() {
   // degrades to a quiet 'unavailable' under Expo Go / web.
   useEffect(() => {
     void registerBackgroundCatchSync();
+  }, []);
+
+  // Offline storage engine: provision the on-device SQLite container (or its
+  // web localStorage fallback) once on root mount. Fire-and-forget — the
+  // engine traps its own failures so navigation never blocks on storage.
+  useEffect(() => {
+    void initOfflineDatabase();
   }, []);
 
   // Deep-link handler for inbound spot-share URLs: verify the cryptographic

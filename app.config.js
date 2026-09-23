@@ -114,6 +114,7 @@ module.exports = {
       // wiring for remote push on both platforms.
       'expo-notifications',
       'expo-updates',
+      'expo-sqlite',
     ],
     extra: {
       router: {},
