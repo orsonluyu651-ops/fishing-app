@@ -35,3 +35,5 @@ android-service-account-key.json
 *.p12
 *.mobileprovision
 
+android/
+iOS/
