@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { shareCatchLog } from '@/lib/shareUtility';
 
 export default function HomeScreen() {
   // Form State
@@ -89,6 +90,21 @@ export default function HomeScreen() {
             <Text style={styles.catchSpecies}>{item.species}</Text>
             <Text style={styles.catchMeta}>📏 {item.length} cm  •  📍 {item.location}</Text>
           </View>
+          <TouchableOpacity
+            style={styles.shareBtn}
+            onPress={() =>
+              shareCatchLog({
+                title: item.species,
+                weight: `${item.length} cm`,
+                locationName: item.location,
+              })
+            }
+            accessibilityRole="button"
+            accessibilityLabel={`Share ${item.species} catch`}
+            accessibilityHint="Opens the system share sheet for this catch log"
+          >
+            <Ionicons name="share-social-outline" size={20} color="#0284c7" />
+          </TouchableOpacity>
         </View>
       ))}
     </ScrollView>
@@ -111,5 +127,6 @@ const styles = StyleSheet.create({
   catchIconContainer: { width: 40, height: 40, backgroundColor: '#e0f2fe', borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   catchDetails: { flex: 1 },
   catchSpecies: { fontSize: 15, fontWeight: '700', color: '#0f172a' },
-  catchMeta: { fontSize: 13, color: '#64748b', marginTop: 2 }
+  catchMeta: { fontSize: 13, color: '#64748b', marginTop: 2 },
+  shareBtn: { paddingHorizontal: 10, paddingVertical: 8, marginLeft: 8, borderRadius: 8 }
 });
