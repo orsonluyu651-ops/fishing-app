@@ -20,6 +20,8 @@ const TILES_DIR_NAME = 'tiles';
 const TILE_USER_AGENT = 'Fishlore/1.0 (fishlore-app; offline map tile cache)';
 export const MIN_ZOOM = 3;
 export const MAX_ZOOM = 17;
+/** Native UrlTile disk-cache refresh window: 7 days, in seconds (tileCacheMaxAge). */
+export const URL_TILE_CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 
 export interface Bbox {
   minLat: number;
@@ -58,6 +60,28 @@ function getTilesDir(): Directory {
 /** Base URI of the tile cache, with a trailing slash — safe to concatenate. */
 export function getTilesDirUri(): string {
   return getTilesDir().uri;
+}
+
+const URL_TILE_CACHE_DIR_NAME = 'url_tile_cache';
+let urlTileCacheDir: Directory | null = null;
+
+/**
+ * Cache directory for react-native-maps' native UrlTile disk cache,
+ * returned as a `file://` URI (accepted by tileCachePath alongside plain paths).
+ *
+ * Deliberately separate from the flat `tiles/` offline store: the native SDK
+ * writes nested `/{z}/{x}/{y}` extension-less files and leaves all eviction
+ * to the client, so mixing the two trees would break the deterministic
+ * `tileFileName` lookups the offline template depends on. Paths.cache is
+ * system-purgeable, which is the correct home for a render-lazy HTTP cache.
+ */
+export function getUrlTileCacheDirUri(): string {
+  if (!urlTileCacheDir) {
+    const dir = new Directory(Paths.cache, URL_TILE_CACHE_DIR_NAME);
+    if (!dir.exists) dir.create();
+    urlTileCacheDir = dir;
+  }
+  return urlTileCacheDir.uri;
 }
 
 // ── Web Mercator math ──────────────────────────────────────────────

@@ -7,8 +7,10 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
   TILE_SOURCE_URL_TEMPLATE,
+  URL_TILE_CACHE_MAX_AGE_SECONDS,
   downloadTileRange,
   getOfflineTileUrlTemplate,
+  getUrlTileCacheDirUri,
   regionToBbox,
   zoomForRegion,
 } from '../../src/lib/mapTileCache';
@@ -281,6 +283,12 @@ export default function FishloreMap() {
             zIndex={1}
             // iOS: hide the Apple basemap so the OSM raster is authoritative.
             shouldReplaceMapContent={Platform.OS === 'ios'}
+            // Native lazy disk cache: every rendered tile is persisted under
+            // Paths.cache/url_tile_cache/{z}/{x}/{y} on first paint and served
+            // from disk afterwards; tileCacheMaxAge (seconds) re-fetches tiles
+            // older than 7 days via serve-stale-while-refresh.
+            tileCachePath={getUrlTileCacheDirUri()}
+            tileCacheMaxAge={URL_TILE_CACHE_MAX_AGE_SECONDS}
           />
           {HOTSPOTS.filter((spot) => visiblePointIds.has(spot.id)).map((spot) => (
             <Marker

@@ -2,12 +2,15 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { shareCatchLog } from '@/lib/shareUtility';
+import { OnboardingSlider } from '@/components/OnboardingSlider';
 
 export default function HomeScreen() {
   // Form State
   const [species, setSpecies] = useState('');
   const [length, setLength] = useState('');
   const [location, setLocation] = useState('');
+  const [showOnboarding, setShowOnboarding] = useState(true);
+
   
   // Simulated Catch History State
   const [catches, setCatches] = useState([
@@ -35,6 +38,10 @@ export default function HomeScreen() {
     setLength('');
     setLocation('');
   };
+
+  if (showOnboarding) {
+    return <OnboardingSlider onComplete={() => setShowOnboarding(false)} />;
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
