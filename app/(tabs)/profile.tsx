@@ -256,6 +256,45 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* ⚙️ Developer Profile Switcher Panel */}
+      {/* Local testaccount switcher for rapid profile-context QA. Does not touch
+          real Supabase auth; it only flips the local profile context that the
+          profile screen analytics and telemetry refresh path uses. */}
+      {user && (
+        <View style={styles.devSwitcherPanel}>
+          <Text style={styles.devSwitcherLabel}>DEV PROFILE SWITCHER</Text>
+          <View style={styles.devSwitcherRow}>
+            {[
+              { id: 'dev-goldcoast', username: 'GoldCoast_Fisher', label: 'Local Pro Angler' },
+              { id: 'dev-breamking', username: 'BreamKing', label: 'Estuary Light-Tackle' },
+              { id: 'dev-sunnycoast', username: 'Sunny_Coast_Fish', label: 'Offshore Heavy-Tackle' },
+            ].map((account) => (
+              <TouchableOpacity
+                key={account.id}
+                onPress={() => {
+                  setUser({ id: account.id, username: account.username });
+                  void refreshTelemetry();
+                  void loadAnalytics();
+                }}
+                style={[
+                  styles.devSwitcherChip,
+                  user.id === account.id && styles.devSwitcherChipActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.devSwitcherChipText,
+                    user.id === account.id && styles.devSwitcherChipTextActive,
+                  ]}
+                >
+                  {account.username}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
+
       {/* 📤 Local Log Export Share Dashboard */}
       <View style={{ paddingHorizontal: 16, marginVertical: 12 }}>
         <CatchExportControls
@@ -319,5 +358,60 @@ const styles = StyleSheet.create({
   purgeSpinner: { marginLeft: 8 },
   loadingRow: { flexDirection: 'row', alignItems: 'center', padding: 12 },
   loadingText: { marginLeft: 8, fontSize: 14, color: '#64748b' },
-  errorText: { fontSize: 14, color: '#dc2626', textAlign: 'center', padding: 12 }
+  errorText: { fontSize: 14, color: '#dc2626', textAlign: 'center', padding: 12 },
+
+  // Developer Profile Switcher Panel styles
+  devSwitcherPanel: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 100,
+    backgroundColor: '#0b1120',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  devSwitcherLabel: {
+    color: '#94a3b8',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  devSwitcherRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  devSwitcherChip: {
+    backgroundColor: '#1f2937',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#334155',
+    minWidth: 96,
+    alignItems: 'center',
+  },
+  devSwitcherChipActive: {
+    backgroundColor: '#0284c7',
+    borderColor: '#0284c7',
+  },
+  devSwitcherChipText: {
+    color: '#e2e8f0',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  devSwitcherChipTextActive: {
+    color: '#ffffff',
+  },
 });
