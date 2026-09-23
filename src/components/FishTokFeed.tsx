@@ -205,9 +205,21 @@ export const FishTokFeed: React.FC = () => {
             </View>
 
             <View style={styles.videoPlaceholder}>
-              <Text style={styles.playIcon}>
-                {viewableId === item.id ? '▶ Video Active' : '⏸ Paused'}
-              </Text>
+              {viewableId === item.id ? (
+                <View style={styles.mockVideoFrame}>
+                  <View style={styles.mockVideoOverlay}>
+                    <Ionicons name="play-circle" size={64} color="#ffffff" style={{ opacity: 0.45 }} />
+                  </View>
+                  <View style={styles.mockWaveform}>
+                    {[...Array(12)].map((_, i) => {
+                      const h = 4 + (Math.sin(i * 0.8) * 10 + 10) + (viewableId === item.id ? 4 : 0);
+                      return <View key={i} style={[styles.mockWaveBar, { height: Math.max(4, h) }]} />;
+                    })}
+                  </View>
+                </View>
+              ) : (
+                <Text style={styles.playIcon}>⏸ Paused</Text>
+              )}
             </View>
 
             <View style={styles.overlay}>
@@ -364,18 +376,54 @@ const styles = StyleSheet.create({
   uploadCancelText: { color: '#94a3b8', fontSize: 14, fontWeight: '600' },
     uploadPostBtn: { paddingHorizontal: 20, paddingVertical: 8, borderRadius: 20, backgroundColor: '#0284c7' },
   uploadPostText: { color: '#ffffff', fontSize: 14, fontWeight: '700' },
-  uploadFab: {
+    uploadFab: {
     position: 'absolute',
-    top: 12,
-    right: 12,
+    top: 20,
+    right: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(2, 132, 199, 0.85)',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    zIndex: 999,
+        backgroundColor: 'rgba(2, 132, 199, 0.95)',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 8,
   },
   uploadFabText: { color: '#ffffff', fontSize: 22, fontWeight: '300', lineHeight: 22 },
+  mockVideoFrame: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#0f172a',
+    borderRadius: 12,
+    marginHorizontal: 20,
+  },
+  mockVideoOverlay: {
+    position: 'absolute',
+    top: '25%',
+    left: '25%',
+    width: '50%',
+    height: '50%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mockPlayIcon: {
+    fontSize: 56,
+    color: '#ffffff',
+    opacity: 0.35,
+    lineHeight: 56,
+  },
+  mockWaveform: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 2,
+    marginTop: 16,
+  },
+  mockWaveBar: { width: 3, backgroundColor: '#0284c7', borderRadius: 1.5 },
   toolCell: {
     alignItems: 'center',
     justifyContent: 'center',
