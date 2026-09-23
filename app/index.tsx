@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert 
 import { Ionicons } from '@expo/vector-icons';
 import { shareCatchLog } from '@/lib/shareUtility';
 import { OnboardingSlider } from '@/components/OnboardingSlider';
+import { WeatherDashboard } from '@/components/WeatherDashboard';
 
 export default function HomeScreen() {
   // Form State
@@ -85,6 +86,9 @@ export default function HomeScreen() {
           <Text style={styles.submitBtnText}>Log Catch to Dashboard</Text>
         </TouchableOpacity>
       </View>
+
+      {/* 🌦️ Swipable Marine Weather & Tide Dashboard */}
+      <WeatherDashboard />
 
       {/* 📊 Recent Catch History Feed */}
       <Text style={styles.sectionTitle}>Recent Catches ({catches.length})</Text>
