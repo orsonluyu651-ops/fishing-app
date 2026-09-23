@@ -6,6 +6,7 @@ import * as Linking from 'expo-linking';
 import { supabase } from '../src/lib/supabase';
 import { attachNotificationRouting } from '../src/lib/notifications';
 import { registerBackgroundCatchSync } from '../src/lib/backgroundSync';
+import { startBackgroundReconciliation } from '../src/lib/syncEngine';
 import { parseAndVerifySpotLink } from '../src/lib/spotSharingEngine';
 import { UpdateBoundary } from '../src/components/UpdateBoundary';
 import { TelemetryBoundary } from '../src/components/TelemetryBoundary';
@@ -129,6 +130,14 @@ export default function RootLayout() {
   // engine traps its own failures so navigation never blocks on storage.
   useEffect(() => {
     void initOfflineDatabase();
+  }, []);
+
+  // Background reconciliation loop: whenever the app is visible (or polling
+  // ticks over), attempt to drain any unsynced offline catches back to
+  // Supabase. Runs once on mount and then on a best-effort interval.
+  useEffect(() => {
+    const stop = startBackgroundReconciliation(60_000);
+    return stop;
   }, []);
 
   // Deep-link handler for inbound spot-share URLs: verify the cryptographic
