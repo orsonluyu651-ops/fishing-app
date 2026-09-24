@@ -88,9 +88,13 @@ module.exports = {
       bundler: 'metro',
       output: 'single',
     },
-    plugins: [
+      plugins: [
       'expo-router',
       'expo-image-picker',
+      ['@stripe/stripe-react-native', {
+        merchantIdentifier: 'merchant.com.fishlore.app',
+        bundleIdentifier: 'com.fishlore.app',
+      }],
       [
         'expo-location',
         {
