@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import { compressFeedVideo } from '../lib/videoCompressionPipeline';
 
 interface VideoItem {
   id: string;
@@ -136,7 +137,7 @@ export const FishTokFeed: React.FC = () => {
   };
 
     /* Request library permission then launch the gallery picker for video selection. */
-  const launchMediaPicker = async () => {
+    const launchMediaPicker = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert(
@@ -151,7 +152,21 @@ export const FishTokFeed: React.FC = () => {
       quality: 1,
     });
     if (!result.canceled && result.assets.length > 0) {
-      setSelectedAsset(result.assets[0].uri);
+      const sourceUri = result.assets[0].uri;
+      try {
+        // Run the media compression pipeline before committing the asset
+        // to the feed. This normalizes all uploads to a reasonable bitrate/
+        // resolution and stores the output in the app's cache directory.
+        const compressed = await compressFeedVideo(sourceUri, { quality: 'medium' });
+        console.log(
+          `[Media Pipeline] Accepted compressed URI: ${compressed.uri} ` +
+          `(${compressed.sizeInBytes} bytes, ratio: ${compressed.compressionRatio})`,
+        );
+        setSelectedAsset(compressed.uri);
+      } catch (compressError) {
+        console.error('[Media Pipeline] Compression failed, falling back to original:', compressError);
+        setSelectedAsset(sourceUri);
+      }
     }
   };
 
