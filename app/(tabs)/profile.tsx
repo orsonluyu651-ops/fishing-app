@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { getCacheTelemetryDetails, purgeMapTileCache, type CacheTelemetry, type PurgeResult } from '../../src/lib/cacheTelemetry';
 import { supabase } from '../../src/lib/supabase';
@@ -271,7 +272,8 @@ export default function ProfileScreen() {
             ].map((account) => (
               <TouchableOpacity
                 key={account.id}
-                onPress={() => {
+                                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                   setUser({ id: account.id, username: account.username });
                   void refreshTelemetry();
                   void loadAnalytics();

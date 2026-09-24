@@ -200,8 +200,7 @@ export async function runMigrations(
   dbName: DbName,
 ): Promise<number> {
   if (Platform.OS === 'web') {
-    console.log('[Database Migration] Web platform — skipping native SQLite migrations.');
-    return 0;
+        return 0;
   }
 
   const plan = MIGRATION_PLANS[dbName];
@@ -214,24 +213,15 @@ export async function runMigrations(
   const pendingSteps = plan.steps.filter((s) => s.version > currentVersion);
 
   if (pendingSteps.length === 0) {
-    console.log(
-      `[Database Migration] "${dbName}" is at version ${currentVersion} — no migrations needed.`,
-    );
-    return currentVersion;
+        return currentVersion;
   }
 
-  console.log(
-    `[Database Migration] "${dbName}" at v${currentVersion}, applying ${pendingSteps.length} migration(s).`,
-  );
-
+  
   try {
     // ── Wrap everything in a transaction so a mid-migration failure rolls back. ──
     await db.withTransactionAsync(async () => {
       for (const step of pendingSteps) {
-        console.log(
-          `[Database Migration] v${step.version}: ${step.description}`,
-        );
-
+        
         for (const sql of step.sql) {
           try {
             await db.execAsync(sql);
@@ -252,15 +242,11 @@ export async function runMigrations(
 
         // Bump user_version after successful step execution.
         await db.execAsync(`PRAGMA user_version = ${step.version};`);
-        console.log(`[Database Migration] v${step.version} applied successfully.`);
-      }
+              }
     });
 
     const finalVersion = await getCurrentUserVersion(db);
-    console.log(
-      `[Database Migration] "${dbName}" migration complete — now at v${finalVersion}.`,
-    );
-    return finalVersion;
+        return finalVersion;
   } catch (error) {
     console.error(
       `[Database Migration] CRITICAL FAILURE on "${dbName}":`,

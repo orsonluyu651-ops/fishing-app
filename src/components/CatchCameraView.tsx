@@ -99,8 +99,7 @@ export default function CatchCameraView({
       });
 
       if (photo?.uri) {
-        console.log('[Catch Camera] Photo captured:', photo.uri);
-        onCapture({ uri: photo.uri, mode: 'photo', timestamp: Date.now() });
+                onCapture({ uri: photo.uri, mode: 'photo', timestamp: Date.now() });
       }
     } catch (error) {
       console.error('[Catch Camera] Photo capture failed:', error);
@@ -115,8 +114,7 @@ export default function CatchCameraView({
     }
 
     setRecording(true);
-    console.log('[Catch Camera] Video recording started.');
-
+    
     try {
             const video = await cameraRef.current.recordAsync({
         maxDuration: 60,
@@ -125,14 +123,10 @@ export default function CatchCameraView({
       setRecording(false);
 
       if (video?.uri) {
-        console.log('[Catch Camera] Video recorded:', video.uri);
-
+        
         try {
           const compressed = await compressFeedVideo(video.uri, { quality: 'medium' });
-          console.log(
-            `[Catch Camera] Video compressed: ${compressed.uri} (${compressed.sizeInBytes} bytes, ratio: ${compressed.compressionRatio})`,
-          );
-          onCapture({ uri: compressed.uri, mode: 'video', timestamp: Date.now() });
+                    onCapture({ uri: compressed.uri, mode: 'video', timestamp: Date.now() });
         } catch (compressError) {
           console.error('[Catch Camera] Compression failed, falling back to original:', compressError);
           onCapture({ uri: video.uri, mode: 'video', timestamp: Date.now() });
@@ -157,8 +151,7 @@ export default function CatchCameraView({
     }
 
     if (cameraRef.current) {
-      console.log('[Catch Camera] Stopping video recording.');
-      cameraRef.current.stopRecording();
+            cameraRef.current.stopRecording();
     }
     setRecording(false);
   }, [recording, takePicture]);

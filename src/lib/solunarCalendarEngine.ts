@@ -130,7 +130,6 @@ export async function persistCalendarToSqlite(
       }
     });
 
-    console.log(`[Solunar Calendar] SQLite cache written: ${entries.length} entries for (${coords.latitude}, ${coords.longitude})`);
     return true;
   } catch (error) {
     console.error('[Solunar Calendar] SQLite cache write failed:', error);
@@ -163,8 +162,7 @@ export async function loadCalendarFromSqlite(
     );
 
     if (!rows || rows.length === 0) {
-      console.log('[Solunar Calendar] SQLite cache miss — need to regenerate.');
-      return null;
+            return null;
     }
 
     const entries: CalendarForecastEntry[] = rows.map((row: any) => ({
@@ -183,8 +181,7 @@ export async function loadCalendarFromSqlite(
       },
     }));
 
-        console.log(`[Solunar Calendar] SQLite cache hit: ${entries.length} entries restored.`);
-    return entries;
+            return entries;
   } catch (error) {
     console.error('[Solunar Calendar] SQLite cache read failed:', error);
     return null;
@@ -210,8 +207,7 @@ export async function persistToAsyncStorage(
       } as CalendarCacheMetadata,
     };
     await AsyncStorage.setItem(key, JSON.stringify(payload));
-    console.log(`[Solunar Calendar] AsyncStorage cache written: ${entries.length} days`);
-  } catch (error) {
+      } catch (error) {
     console.error('[Solunar Calendar] AsyncStorage cache write failed:', error);
   }
 }
@@ -233,12 +229,10 @@ export async function loadFromAsyncStorage(
     };
 
     if (Date.now() - meta.generatedAt > CACHE_TTL_MS) {
-      console.log('[Solunar Calendar] AsyncStorage cache expired.');
-      return null;
+            return null;
     }
 
-    console.log(`[Solunar Calendar] AsyncStorage cache hit: ${entries.length} days.`);
-    return entries;
+        return entries;
   } catch (error) {
     console.error('[Solunar Calendar] AsyncStorage cache read failed:', error);
     return null;
@@ -274,8 +268,7 @@ export async function clearCalendarCache(coords?: Coordinates): Promise<void> {
     }
   }
 
-    console.log('[Solunar Calendar] All caches cleared.');
-}
+    }
 
 // ── Core Engine: 30-Day Forecast Generation ───────────────────────────────────
 
@@ -330,10 +323,7 @@ export function generate30DayForecast(
     entries.push(entry);
   }
 
-  console.log(
-    `[Solunar Calendar] Generated ${entries.length}-day forecast for (${coordinates.latitude}, ${coordinates.longitude}).`,
-  );
-
+  
   return entries;
 }
 
@@ -353,8 +343,7 @@ export async function getOrCreateCalendar(
   if (asyncCache) return asyncCache;
 
   // Cache miss — generate fresh
-  console.log('[Solunar Calendar] Cache miss — computing 30-day forecast...');
-  const entries = generate30DayForecast(coordinates);
+    const entries = generate30DayForecast(coordinates);
 
   // Persist to both (best effort)
   const sqliteOk = await persistCalendarToSqlite(entries, coordinates);

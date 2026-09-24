@@ -10,9 +10,7 @@ export default function GuideScreen() {
     latitude: -27.937,
     longitude: 153.431,
     fish: 'Jewfish & Flathead',
-  });
-
-  console.log('[Guide UI Integration] Selected hotspot:', selectedSpot.name, selectedSpot.latitude, selectedSpot.longitude);
+    });
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>

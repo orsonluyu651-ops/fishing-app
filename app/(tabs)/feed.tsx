@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, Modal, Image, Alert, LayoutAnimation, AppState } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, Modal, Image, Alert, LayoutAnimation, AppState, Linking } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { supabase } from '../../src/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
@@ -23,6 +24,7 @@ import { optimizeCatchImage } from '../../src/lib/mediaOptimizer';
 import { askAssistant, type AssistantAnswer } from '../../src/lib/assistant';
 import { fetchFollowingIds, fetchFollowingCatchesRange } from '../../src/lib/socialEngine';
 import { generateMockCatches } from '../../src/lib/mockDataSeed';
+import { EmptyState } from '../../src/components/EmptyState';
 
 interface CatchItem {
   id: string;
@@ -445,11 +447,15 @@ export default function FeedScreen() {
 
     // The optimistic flip happens first, unconditionally — the database write
     // below is a background confirmation, never a gate on the UI.
-    applyCatchUpdate(postId, (item) => ({
+        applyCatchUpdate(postId, (item) => ({
       ...item,
       has_liked: nextLiked,
       likes_count: Math.max(0, item.likes_count + (nextLiked ? 1 : -1)),
     }));
+
+    Haptics.impactAsync(
+      nextLiked ? Haptics.ImpactFeedbackStyle.Medium : Haptics.ImpactFeedbackStyle.Light
+    );
 
     try {
       if (nextLiked) {
@@ -617,10 +623,12 @@ export default function FeedScreen() {
         .select('id');
       if (insertError) throw insertError;
 
-      // 3) Refresh the feed (the create_feed_post_on_catch trigger auto-creates the post).
+            // 3) Refresh the feed (the create_feed_post_on_catch trigger auto-creates the post).
       resetCatchForm();
       await initializeFeed();
       await refreshPendingQueue();
+
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch (error: any) {
       console.error('Error submitting catch:', error);
       if (isNetworkError(error)) {
@@ -996,7 +1004,7 @@ export default function FeedScreen() {
         )}
         onEndReached={loadMoreCatches}
         onEndReachedThreshold={0.2}
-        ListFooterComponent={
+                ListFooterComponent={
           loadingMore ? (
             <View style={styles.footerSpinner}>
               <ActivityIndicator size="small" color="#0284c7" />
@@ -1004,6 +1012,21 @@ export default function FeedScreen() {
             </View>
           ) : !hasMore && catches.length > 0 ? (
             <Text style={styles.endOfFeed}>You're all caught up 🎣</Text>
+          ) : null
+        }
+                ListEmptyComponent={
+          !loading && !syncingQueue ? (
+            <EmptyState
+              icon="fish-outline"
+              title="No catches yet"
+              description="Log your first catch to see what your mates are reeling in."
+              actionLabel="Log Your First Catch"
+              onAction={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                animateLayout();
+                setModalVisible(true);
+              }}
+            />
           ) : null
         }
       />
@@ -1115,7 +1138,17 @@ export default function FeedScreen() {
          setLoadingLocation(true);
          let { status } = await Location.requestForegroundPermissionsAsync();
          if (status !== 'granted') {
-           alert('Permission to access location was denied');
+           Alert.alert(
+            'Location Permission Needed',
+            'FishLore needs your location to tag your catch accurately. You can also select a spot from the map.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Open Map',
+                onPress: () => { Linking.openURL('fishlore://maps'); },
+              },
+            ],
+          );
            return;
          }
          let currentLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -1123,7 +1156,17 @@ export default function FeedScreen() {
          setLocation({ latitude: Number(currentLoc.coords.latitude), longitude: Number(currentLoc.coords.longitude) });
        } catch (error) {
          console.error('Error fetching location:', error);
-         alert('Could not fetch location. Please try again.');
+         Alert.alert(
+            'Location Unavailable',
+            'Could not fetch your location. You can still log your catch and select a spot from the map later.',
+            [
+              { text: 'OK' },
+              {
+                text: 'Select from Map',
+                onPress: () => { Linking.openURL('fishlore://maps'); },
+              },
+            ],
+          );
        } finally {
          setLoadingLocation(false);
        }

@@ -130,9 +130,10 @@ module.exports = {
       ],
       // Notification engine: default Android channel + icon/color and sound
       // wiring for remote push on both platforms.
-            'expo-notifications',
+                        'expo-notifications',
       'expo-updates',
             'expo-sqlite',
+      ['expo-splash-screen', {}],
       ['react-native-share', {}],
     ],
     extra: {

@@ -19,8 +19,7 @@ let nativeDb: any = null;
 
 export const initOfflineDatabase = async (): Promise<void> => {
   if (Platform.OS === 'web') {
-    console.log('📦 Storage Engine: Safari Web Session Mode Initialized.');
-    if (!localStorage.getItem('fishlore_web_catches')) {
+        if (!localStorage.getItem('fishlore_web_catches')) {
       localStorage.setItem('fishlore_web_catches', JSON.stringify([]));
     }
     return;
@@ -35,8 +34,7 @@ export const initOfflineDatabase = async (): Promise<void> => {
     //    pragma after each step. Existing data is never dropped. ──
     await runMigrations(nativeDb, 'fishlore_offline.db');
 
-    console.log('💾 Storage Engine: Native expo-sqlite Container Formatted.');
-  } catch (error) {
+      } catch (error) {
     console.error('[Database Migration] Offline DB Initialization failure:', error);
   }
 };
@@ -88,8 +86,7 @@ export const queueOfflineCatch = async (catchLog: Omit<OfflineCatch, 'id' | 'syn
   if (Platform.OS === 'web') {
     const webCache = JSON.stringify([...JSON.parse(localStorage.getItem('fishlore_web_catches') || '[]'), { ...catchLog, id: Date.now(), synced: 0, solunar_rating: solunarRating }]);
     localStorage.setItem('fishlore_web_catches', webCache);
-    console.log('📦 Web Cache Synced:', catchLog.species);
-    // Queue the mutation for web sync reconciliation
+        // Queue the mutation for web sync reconciliation
     await queueMutation('offline_catches', Date.now().toString(), 'INSERT', {
       ...catchLog,
       solunar_rating: solunarRating,
@@ -103,8 +100,7 @@ export const queueOfflineCatch = async (catchLog: Omit<OfflineCatch, 'id' | 'syn
       'INSERT INTO offline_catches (species, weight, length, location_name, timestamp, synced, solunar_rating) VALUES (?, ?, ?, ?, ?, 0, ?);',
       [catchLog.species, catchLog.weight || null, catchLog.length || null, catchLog.location_name, catchLog.timestamp, solunarRating]
     );
-    console.log('💾 Native Cache Queued:', catchLog.species);
-
+    
     // ── Queue the mutation into the outbox for background sync ──
     const payload = {
       species: catchLog.species,

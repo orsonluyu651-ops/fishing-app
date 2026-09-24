@@ -78,28 +78,21 @@ export function useNetworkSync(
   /** Trigger an outbox drain immediately (bypassing debounce). */
   const flushNow = useCallback(async (): Promise<void> => {
     const now = Date.now();
-    console.log('[Sync Network Hook] Flush requested at', new Date(now).toISOString());
 
     if (isSyncing) {
-      console.log('[Sync Network Hook] Skip — sync worker already running.');
-      return;
+            return;
     }
 
     setIsSyncing(true);
     setError(null);
 
     try {
-      console.log('[Sync Network Hook] Draining outbox with batch size:', DRAIN_BATCH_SIZE);
-      const metrics = await drainOutbox(DRAIN_BATCH_SIZE);
+            const metrics = await drainOutbox(DRAIN_BATCH_SIZE);
 
       setLastSyncTimestamp(now);
       lastDrainTimestampRef.current = now;
 
-      console.log(
-        `[Sync Network Hook] Outbox drain complete. ` +
-        `Success: ${metrics.success}, Failed: ${metrics.failed}, Retried: ${metrics.retried}`,
-      );
-    } catch (err: unknown) {
+          } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[Sync Network Hook] Outbox drain failed:', msg);
       setError(`Sync failed: ${msg}`);
@@ -118,14 +111,10 @@ export function useNetworkSync(
     const elapsed = now - lastDrainTimestampRef.current;
 
     if (elapsed < DEBOUNCE_MS) {
-      console.log(
-        `[Sync Network Hook] Debounce guard active — only ${elapsed}ms since last drain (need ${DEBOUNCE_MS}ms).`,
-      );
-      return;
+            return;
     }
 
-    console.log('[Sync Network Hook] Debounce guard passed — triggering drain.');
-    void flushNow();
+        void flushNow();
     }, [flushNow]);
 
   /**
@@ -147,30 +136,23 @@ export function useNetworkSync(
 
       setNetworkStatus(newStatus);
 
-      console.log(
-        `[Sync Network Hook] Network state changed: ` +
-        `connected=${wasConnected}, reachable=${isReachable}, type=${state.type}`,
-      );
-
+      
       // Detect the transition: disconnected → connected
       if (isFullyOnline && !prevConnectedRef.current) {
-        console.log('[Sync Network Hook] Connectivity transition detected: OFFLINE → ONLINE');
-        prevConnectedRef.current = true;
+                prevConnectedRef.current = true;
 
         if (autoFlush) {
           attemptDebouncedDrain();
         }
       } else if (!isFullyOnline && prevConnectedRef.current) {
-        console.log('[Sync Network Hook] Connectivity transition detected: ONLINE → OFFLINE');
-        prevConnectedRef.current = false;
+                prevConnectedRef.current = false;
       }
     },
         [autoFlush, attemptDebouncedDrain],
   );
 
   useEffect(() => {
-    console.log('[Sync Network Hook] Initializing network subscription.');
-
+    
     // Seed initial state synchronously.
     NetInfo.fetch()
       .then((initialState) => {
@@ -187,10 +169,7 @@ export function useNetworkSync(
         setNetworkStatus(status);
         prevConnectedRef.current = wasConnected && isReachable;
 
-        console.log(
-          `[Sync Network Hook] Initial state: connected=${wasConnected}, reachable=${isReachable}, type=${initialState.type}`,
-        );
-      })
+              })
       .catch((err: unknown) => {
         console.error('[Sync Network Hook] Initial NetInfo.fetch failed:', err);
         setError(
@@ -201,11 +180,9 @@ export function useNetworkSync(
     // Subscribe to real-time changes.
     const subscription: NetInfoSubscription = NetInfo.addEventListener(handleNetInfoChange);
 
-    console.log('[Sync Network Hook] Network subscription active.');
-
+    
     return () => {
-      console.log('[Sync Network Hook] Cleaning up network subscription.');
-      subscription();
+            subscription();
     };
   }, [handleNetInfoChange]);
 

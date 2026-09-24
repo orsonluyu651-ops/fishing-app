@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback, memo } from 'react';
+import * as Haptics from 'expo-haptics';
 import {
   StyleSheet,
   View,
@@ -16,6 +17,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { compressFeedVideo } from '../lib/videoCompressionPipeline';
 import CatchCameraView, { CaughtMedia } from './CatchCameraView';
 import { shareVideoItemCatch } from '../lib/catchShareExport';
+import { EmptyState } from './EmptyState';
 
 export interface VideoItem {
   id: string;
@@ -39,7 +41,7 @@ interface CommentSheetProps {
 
 const { width, height } = Dimensions.get('window');
 
-const CommentSheet: React.FC<CommentSheetProps> = ({ visible, video, onClose, onAddComment }) => {
+const CommentSheet: React.FC<CommentSheetProps> = React.memo(({ visible, video, onClose, onAddComment }) => {
   const [draft, setDraft] = useState('');
   if (!visible || !video) return null;
   const handleSend = () => {
@@ -76,9 +78,116 @@ const CommentSheet: React.FC<CommentSheetProps> = ({ visible, video, onClose, on
           </View>
         </View>
       </TouchableOpacity>
-    </Modal>
+            </Modal>
   );
-};
+});
+
+/** Memoized video item row */
+const VideoItemRow = memo(
+  ({
+    item,
+    viewableId,
+    onToggleLike,
+    onCommentPress,
+    onShare,
+  }: {
+    item: VideoItem;
+    viewableId: string | null;
+    onToggleLike: (id: string) => void;
+    onCommentPress: (id: string) => void;
+    onShare: (item: VideoItem) => void;
+  }) => {
+    return (
+      <View style={styles.videoCard}>
+        {/* Deep-sea gradient stack */}
+        <View style={styles.gradientFill} pointerEvents="none">
+          <View style={[styles.gradientBand, styles.bandAbyss]} />
+          <View style={[styles.gradientBand, styles.bandDeep]} />
+          <View style={[styles.gradientBand, styles.bandMid]} />
+          <View style={[styles.gradientBand, styles.bandMarine]} />
+          <View style={[styles.gradientBand, styles.bandCyan]} />
+          <View style={[styles.gradientBand, styles.bandTeal]} />
+        </View>
+        <View style={styles.accentGlowTop} pointerEvents="none" />
+        <View style={styles.accentGlowBottom} pointerEvents="none" />
+
+        {/* Right-hand vertical floating toolbar */}
+        <View style={styles.rightToolbar}>
+          <TouchableOpacity
+            style={styles.toolCell}
+            onPress={() => onToggleLike(item.id)}
+            accessibilityRole="button"
+            accessibilityLabel={item.isLiked ? 'Unlike catch' : 'Like catch'}
+            accessibilityHint="Toggles your like on this catch"
+          >
+            <Ionicons
+              name={item.isLiked ? 'heart' : 'heart-outline'}
+              size={28}
+              color="#ef4444"
+            />
+            <Text style={styles.toolCount}>{item.likesCount}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.toolCell}
+            onPress={() => onCommentPress(item.id)}
+            accessibilityRole="button"
+            accessibilityLabel="Open comments"
+            accessibilityHint="Opens the comment sheet for this catch"
+          >
+            <Ionicons name="chatbubble-ellipses-outline" size={26} color="#ffffff" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.toolCell}
+            onPress={() => onShare(item)}
+            accessibilityRole="button"
+            accessibilityLabel="Share catch to other apps"
+            accessibilityHint="Opens the system share sheet with a privacy-safe catch card"
+          >
+            <Ionicons name="share-outline" size={26} color="#10b981" />
+            <Text style={styles.toolCount}>Share</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.videoPlaceholder}>
+          {viewableId === item.id ? (
+            <View style={styles.mockVideoFrame}>
+              <View style={styles.mockVideoOverlay}>
+                <Ionicons name="play-circle" size={64} color="#ffffff" style={{ opacity: 0.45 }} />
+              </View>
+              <View style={styles.mockWaveform}>
+                {[...Array(12)].map((_, i) => {
+                  const h = 4 + (Math.sin(i * 0.8) * 10 + 10) + 4;
+                  return <View key={i} style={[styles.mockWaveBar, { height: Math.max(4, h) }]} />;
+                })}
+              </View>
+            </View>
+          ) : (
+            <Text style={styles.playIcon}>⏸ Paused</Text>
+          )}
+        </View>
+
+        <View style={styles.overlay}>
+          <Text style={styles.title}>{item.title}</Text>
+          <View style={styles.tagRow}>
+            {item.speciesTags.map((tag) => (
+              <View key={tag} style={styles.speciesTag}>
+                <Text style={styles.speciesTagText}>#{tag}</Text>
+              </View>
+            ))}
+          </View>
+          <Text style={styles.meta}>{item.waterCondition}</Text>
+        </View>
+      </View>
+    );
+  },
+  (prev, next) =>
+    prev.item.id === next.item.id &&
+    prev.item.likesCount === next.item.likesCount &&
+    prev.item.isLiked === next.item.isLiked &&
+    prev.item.commentsCount === next.item.commentsCount &&
+    prev.viewableId === next.viewableId,
+);
+VideoItemRow.displayName = 'VideoItemRow';
 
 export const FishTokFeed: React.FC = () => {
   const [viewableId, setViewableId] = useState<string | null>('1');
@@ -123,22 +232,27 @@ export const FishTokFeed: React.FC = () => {
     }
   });
 
-  /* Toggle like state + dynamically bump the count on screen. */
-  const toggleLike = (id: string) => {
-    setVideos((prev) =>
-      prev.map((v) =>
+      /* Toggle like state + dynamically bump the count on screen. */
+  const toggleLike = useCallback((id: string) => {
+    setVideos((prev) => {
+      const video = prev.find((v) => v.id === id);
+      const isLiked = video?.isLiked ?? false;
+      Haptics.impactAsync(
+        isLiked ? Haptics.ImpactFeedbackStyle.Light : Haptics.ImpactFeedbackStyle.Medium
+      );
+      return prev.map((v) =>
         v.id === id
           ? { ...v, isLiked: !v.isLiked, likesCount: v.isLiked ? v.likesCount - 1 : v.likesCount + 1 }
           : v
-      )
-    );
-  };
+      );
+    });
+  }, []);
 
-  const addComment = (id: string, text: string) => {
+  const addComment = useCallback((id: string, text: string) => {
     setVideos((prev) =>
       prev.map((v) => (v.id === id ? { ...v, comments: [...v.comments, text] } : v))
     );
-  };
+  }, []);
 
     /* Request library permission then launch the gallery picker for video selection. */
     const launchMediaPicker = async () => {
@@ -161,11 +275,7 @@ export const FishTokFeed: React.FC = () => {
         // Run the media compression pipeline before committing the asset
         // to the feed. This normalizes all uploads to a reasonable bitrate/
         // resolution and stores the output in the app's cache directory.
-        const compressed = await compressFeedVideo(sourceUri, { quality: 'medium' });
-        console.log(
-          `[Media Pipeline] Accepted compressed URI: ${compressed.uri} ` +
-          `(${compressed.sizeInBytes} bytes, ratio: ${compressed.compressionRatio})`,
-        );
+                const compressed = await compressFeedVideo(sourceUri, { quality: 'medium' });
         setSelectedAsset(compressed.uri);
       } catch (compressError) {
         console.error('[Media Pipeline] Compression failed, falling back to original:', compressError);
@@ -174,16 +284,17 @@ export const FishTokFeed: React.FC = () => {
     }
   };
 
-  const handleUpload = () => {
+    const handleUpload = useCallback(() => {
     const t = uploadTitle.trim();
     if (t.length === 0) {
       Alert.alert('Missing title', 'Give your video a title so your mates know the story.');
       return;
     }
+    const THUMBNAIL_COLORS = ['#0284c7', '#0d9488', '#10b981', '#0d9488', '#0284c7'];
     const newCard: VideoItem = {
       id: Date.now().toString(),
       title: t,
-      waterCondition: 'Water Temp: ?? • Tide: ??',
+      waterCondition: 'Water Temp: ?? \u2022 Tide: ??',
       url: selectedAsset ?? 'https://mixkit.co',
       speciesTags: speciesTags
         .split(',')
@@ -193,35 +304,41 @@ export const FishTokFeed: React.FC = () => {
       commentsCount: 0,
       isLiked: false,
       comments: [],
-      thumbnailColor: ['#0284c7', '#0d9488', '#10b981', '#0d9488', '#0284c7'][
-        Math.floor(Math.random() * 5)
-      ],
+      thumbnailColor: THUMBNAIL_COLORS[Math.floor(Math.random() * THUMBNAIL_COLORS.length)],
     };
     setVideos((prev) => [newCard, ...prev]);
     setUploadTitle('');
     setSpeciesTags('');
     setSelectedAsset(null);
-        setUploadVisible(false);
-  };
+    setUploadVisible(false);
+  }, [uploadTitle, speciesTags, selectedAsset]);
 
-  /** Handle media captured from CatchCameraView. */
-  const handleCapture = (media: CaughtMedia): void => {
-    console.log('[Catch Camera] Capture received in FishTokFeed:', media.mode, media.uri);
+    const handleCapture = useCallback((media: CaughtMedia): void => {
     setCameraVisible(false);
 
     if (media.mode === 'video') {
-      // Videos are already compressed in the pipeline — just prepend to feed
       setSelectedAsset(media.uri);
       setUploadVisible(true);
     } else if (media.mode === 'photo') {
-      // Photos go straight to catch log form data state
       setPhotoForLog(media.uri);
-      Alert.alert(
-        'Catch Log',
-        'Photo captured. Add it to the catch log form below.',
-      );
+      Alert.alert('Catch Log', 'Photo captured. Add it to the catch log form below.');
     }
-  };
+  }, []);
+
+  // Memoized renderItem to prevent FlatList from re-rendering items
+  // unnecessarily on parent re-renders (e.g. state changes in upload form).
+  const renderVideoItem = useCallback(
+    ({ item }: { item: VideoItem }) => (
+      <VideoItemRow
+        item={item}
+        viewableId={viewableId}
+        onToggleLike={toggleLike}
+        onCommentPress={setCommentTarget}
+        onShare={shareVideoItemCatch}
+      />
+    ),
+    [viewableId, toggleLike, shareVideoItemCatch],
+  );
 
   return (
         <View style={styles.container}>
@@ -245,90 +362,30 @@ export const FishTokFeed: React.FC = () => {
         showsVerticalScrollIndicator={false}
         onViewableItemsChanged={onViewableItemsChanged.current}
         viewabilityConfig={{ itemVisiblePercentThreshold: 80 }}
-        renderItem={({ item }) => (
-          <View style={styles.videoCard}>
-            {/* Deep-sea gradient stack: abyssal navy → marine blue → teal */}
-            <View style={styles.gradientFill} pointerEvents="none">
-              <View style={[styles.gradientBand, styles.bandAbyss]} />
-              <View style={[styles.gradientBand, styles.bandDeep]} />
-              <View style={[styles.gradientBand, styles.bandMid]} />
-              <View style={[styles.gradientBand, styles.bandMarine]} />
-              <View style={[styles.gradientBand, styles.bandCyan]} />
-              <View style={[styles.gradientBand, styles.bandTeal]} />
-            </View>
-            <View style={styles.accentGlowTop} pointerEvents="none" />
-            <View style={styles.accentGlowBottom} pointerEvents="none" />
-
-            {/* Right-hand vertical floating toolbar */}
-            <View style={styles.rightToolbar}>
-              <TouchableOpacity
-                style={styles.toolCell}
-                onPress={() => toggleLike(item.id)}
-                accessibilityRole="button"
-                accessibilityLabel={item.isLiked ? 'Unlike catch' : 'Like catch'}
-                accessibilityHint="Toggles your like on this catch"
-              >
-                <Ionicons
-                  name={item.isLiked ? 'heart' : 'heart-outline'}
-                  size={28}
-                  color="#ef4444"
-                />
-                <Text style={styles.toolCount}>{item.likesCount}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.toolCell}
-                onPress={() => setCommentTarget(item.id)}
-                accessibilityRole="button"
-                accessibilityLabel="Open comments"
-                accessibilityHint="Opens the comment sheet for this catch"
-              >
-                                <Ionicons name="chatbubble-ellipses-outline" size={26} color="#ffffff" />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.toolCell}
-                onPress={() => shareVideoItemCatch(item)}
-                accessibilityRole="button"
-                accessibilityLabel="Share catch to other apps"
-                accessibilityHint="Opens the system share sheet with a privacy-safe catch card"
-              >
-                <Ionicons name="share-outline" size={26} color="#10b981" />
-                <Text style={styles.toolCount}>Share</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.videoPlaceholder}>
-              {viewableId === item.id ? (
-                <View style={styles.mockVideoFrame}>
-                  <View style={styles.mockVideoOverlay}>
-                    <Ionicons name="play-circle" size={64} color="#ffffff" style={{ opacity: 0.45 }} />
-                  </View>
-                  <View style={styles.mockWaveform}>
-                    {[...Array(12)].map((_, i) => {
-                      const h = 4 + (Math.sin(i * 0.8) * 10 + 10) + (viewableId === item.id ? 4 : 0);
-                      return <View key={i} style={[styles.mockWaveBar, { height: Math.max(4, h) }]} />;
-                    })}
-                  </View>
-                </View>
-              ) : (
-                <Text style={styles.playIcon}>⏸ Paused</Text>
-              )}
-            </View>
-
-            <View style={styles.overlay}>
-              <Text style={styles.title}>{item.title}</Text>
-              <View style={styles.tagRow}>
-                {item.speciesTags.map((tag) => (
-                  <View key={tag} style={styles.speciesTag}>
-                    <Text style={styles.speciesTagText}>#{tag}</Text>
-                  </View>
-                ))}
-              </View>
-              <Text style={styles.meta}>{item.waterCondition}</Text>
-            </View>
+                renderItem={renderVideoItem}
+        maxToRenderPerBatch={5}
+        windowSize={7}
+        initialNumToRender={3}
+        removeClippedSubviews={true}
+        updateCellsBatchingPeriod={30}
+                        getItemLayout={(_data: any, index: number) => ({
+          length: height,
+          offset: height * index,
+          index,
+        })}
+                onEndReachedThreshold={0.5}
+        ListEmptyComponent={
+          <View style={styles.fishTokEmptyContainer}>
+            <EmptyState
+              icon="videocam-outline"
+              title="No catch videos yet"
+              description="Record and share your first catch video — your mates will be stoked to see it."
+              actionLabel="Upload a Video"
+              onAction={() => setUploadVisible(true)}
+            />
           </View>
-        )}
+        }
       />
-
       {/* Conditional comment modal sheet */}
       {commentTarget && (
         <CommentSheet
@@ -596,5 +653,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15, 23, 42, 0.55)',
     marginBottom: 12,
   },
-  toolCount: { color: '#ffffff', fontSize: 13, fontWeight: '600', marginTop: 2 },
+    toolCount: { color: '#ffffff', fontSize: 13, fontWeight: '600', marginTop: 2 },
+  fishTokEmptyContainer: {
+    flex: 1,
+    height: height,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000000',
+    paddingBottom: 100,
+  },
 });

@@ -46,6 +46,19 @@ export interface SyncMetrics {
   retried: number;
 }
 
+// ── Race Condition Guards ────────────────────────────────────────────────────
+// Prevents duplicate entries by ensuring only one sync worker drains the
+// outbox at a time. Subsequent sync triggers are debounced/queued.
+let isSyncInProgress = false;
+let pendingSyncResolve: (() => void) | null = null;
+const MAX_DEBOUNCE_RESOLUTIONS = 10;
+const DEBOUNCE_TTL_MS = 5000;
+
+// ── Exponential Backoff ────────────────────────────────────────────────────
+// Backoff schedule for 5xx errors: 5s → 10s → 30s (then capped at 30s).
+const BACKOFF_SCHEDULE = [5000, 10000, 30000];
+const MAX_RETRY_ATTEMPTS = 3;
+
 // ── Database Initialization ───────────────────────────────────────────────────
 
 let nativeDb: any = null;
@@ -67,8 +80,7 @@ async function ensureNativeDb(): Promise<any> {
     await nativeDb.execAsync(`PRAGMA journal_mode = WAL;`);
     // Run migrations — v7 creates sync_outbox table
     await runMigrations(nativeDb, 'fishlore_offline.db');
-    console.log('[Sync Engine] Native DB initialized with outbox migration.');
-  } catch (err) {
+      } catch (err) {
     console.error('[Sync Engine] Native DB init failed:', err);
     nativeDb = null;
   }
@@ -102,8 +114,7 @@ export async function queueMutation(
   payload: object,
 ): Promise<number | null> {
   if (Platform.OS === 'web') {
-    console.log('[Sync Engine] Web platform — queuing mutation via AsyncStorage fallback.');
-    return queueMutationWeb(tableName, recordId, action, payload);
+        return queueMutationWeb(tableName, recordId, action, payload);
   }
 
   const db = await getDb();
@@ -124,8 +135,7 @@ export async function queueMutation(
     );
 
     const outboxId = result?.lastInsertRowId ?? result?.insertId ?? null;
-    console.log(`[Sync Engine] Mutation queued: ${action} ${tableName}#${recordId} → outbox id=${outboxId}`);
-    return outboxId;
+        return outboxId;
   } catch (error) {
     console.error(
       `[Sync Engine] Failed to queue mutation (${action} ${tableName}#${recordId}):`,
@@ -159,8 +169,7 @@ export async function getNextPendingMutations(limit: number = 10): Promise<Outbo
       return [];
     }
 
-    console.log(`[Sync Engine] Retrieved ${rows.length} pending mutations from outbox.`);
-    return rows.map((row) => ({
+        return rows.map((row) => ({
       id: row.id,
       table_name: row.table_name,
       record_id: row.record_id,
@@ -197,8 +206,7 @@ export async function markMutationSynced(id: string): Promise<boolean> {
        WHERE id = ?;`,
       [now, id],
     );
-    console.log(`[Sync Engine] Mutation ${id} marked as SYNCED.`);
-    return true;
+        return true;
   } catch (error) {
     console.error(
       `[Sync Engine] Failed to mark mutation ${id} as synced:`,
@@ -319,8 +327,7 @@ async function applyCatchMutation(entry: OutboxEntry, payload: any): Promise<voi
   });
 
   if (error) throw error;
-  console.log(`[Sync Engine] Cloud upsert: catches#${entry.record_id}`);
-}
+  }
 
 /** Apply mutation to Supabase fishing_pins table. */
 async function applyFishingPinMutation(entry: OutboxEntry, payload: any): Promise<void> {
@@ -340,8 +347,7 @@ async function applyFishingPinMutation(entry: OutboxEntry, payload: any): Promis
   });
 
   if (error) throw error;
-  console.log(`[Sync Engine] Cloud upsert: fishing_pins#${entry.record_id}`);
-}
+  }
 
 /** Apply mutation to Supabase video_metadata table. */
 async function applyVideoMetadataMutation(entry: OutboxEntry, payload: any): Promise<void> {
@@ -358,42 +364,170 @@ async function applyVideoMetadataMutation(entry: OutboxEntry, payload: any): Pro
 
   const { error } = await supabase.from('video_metadata').insert([record]);
   if (error) throw error;
-  console.log(`[Sync Engine] Cloud insert: video_metadata`);
+  }
+
+// ── Exponential Backoff Helpers ──────────────────────────────────────────────
+
+/**
+ * Returns true if the Supabase error is a retryable 5xx server error.
+ */
+function is5xxError(error: any): boolean {
+  if (!error) return false;
+  const status = error?.status ?? error?.statusCode;
+  return typeof status === 'number' && status >= 500 && status < 600;
+}
+
+/**
+ * Computes the backoff delay (ms) for the given attempt number (0-indexed).
+ * Schedule: 5s → 10s → 30s (then capped at 30s for subsequent retries).
+ */
+function getBackoffDelay(attempt: number): number {
+  const scheduleIndex = Math.min(attempt, BACKOFF_SCHEDULE.length - 1);
+  return BACKOFF_SCHEDULE[scheduleIndex];
+}
+
+/**
+ * Attempts to apply a single outbox mutation with exponential backoff for
+ * 5xx errors. Returns true if the mutation was synced (or exhausted retries),
+ * false if it's still pending retry.
+ */
+async function processOutboxEntryWithBackoff(entry: OutboxEntry): Promise<boolean> {
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
+    try {
+      await processOutboxMutation(entry);
+      return true; // Success — mutation is now SYNCED
+    } catch (error) {
+      lastError = error;
+
+      // Retry only on 5xx server errors and only if retries remain.
+      if (!is5xxError(error) || attempt >= MAX_RETRY_ATTEMPTS) {
+        // Non-retryable error or exhausted retries.
+        await markMutationFailed(
+          String(entry.id),
+          error instanceof Error ? error.message : String(error),
+        );
+        return false;
+      }
+
+      // 5xx error and retries remain — apply backoff.
+      const delay = getBackoffDelay(attempt);
+      const isRetryable = is5xxError(error);
+      console.warn(
+        `[Sync Engine] 5xx error on mutation ${entry.id} (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}). ` +
+        `Backing off ${delay}ms before retry.`,
+      );
+
+      // Wait with backoff, then retry.
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  // All retries exhausted
+  await markMutationFailed(
+    String(entry.id),
+    lastError instanceof Error ? lastError.message : String(lastError),
+  );
+  return false;
+}
+
+// ── Race Condition Lock ────────────────────────────────────────────────────────
+
+/**
+ * Runs `drainOutbox` guarded by a lock. If a sync is already in progress,
+ * the caller's promise is queued and will resolve when the running sync
+ * completes (debounced — capped at MAX_DEBOUNCE_RESOLUTIONS queued callers).
+ * This prevents duplicate Supabase entries from concurrent sync workers.
+ */
+export async function drainOutboxGuarded(limit: number = 10): Promise<SyncMetrics> {
+  // If already syncing, defer this call until the current drain completes.
+  if (isSyncInProgress) {
+    if (pendingSyncResolve && MAX_DEBOUNCE_RESOLUTIONS > 0) {
+      // Queue this caller — they'll wait and then retry
+      await new Promise<void>((resolve) => {
+        pendingSyncResolve = resolve;
+      });
+    }
+    // After being deferred, try again (will grab the lock once free)
+    return drainOutboxGuarded(limit);
+  }
+
+  // Acquire the lock
+  isSyncInProgress = true;
+  const lockAcquiredAt = Date.now();
+
+  try {
+    return await drainOutbox(limit);
+  } finally {
+    // Release the lock and resolve any deferred caller
+    isSyncInProgress = false;
+    if (pendingSyncResolve) {
+      const resolver = pendingSyncResolve;
+      pendingSyncResolve = null;
+      resolver();
+    }
+  }
 }
 
 /**
  * Main outbox drain worker — reads pending mutations, processes them in
- * order, and updates their status. Returns aggregate metrics.
+ * order with exponential backoff for 5xx errors, and updates their status.
+ * Returns aggregate metrics.
+ *
+ * @param {boolean} useLock - When true (default), wraps the drain in a
+ *   race-condition-guarded lock so concurrent calls don't duplicate work.
  */
-export async function drainOutbox(limit: number = 10): Promise<SyncMetrics> {
+export async function drainOutbox(limit: number = 10, useLock: boolean = true): Promise<SyncMetrics> {
   const metrics: SyncMetrics = { success: 0, failed: 0, retried: 0 };
 
   const db = await getDb();
   if (!db) {
-    console.log('[Sync Engine] drainOutbox: native DB unavailable, nothing to drain.');
-    return metrics;
+        return metrics;
   }
 
-  const pending = await getNextPendingMutations(limit);
-  if (pending.length === 0) {
-    return metrics;
+  if (useLock && isSyncInProgress) {
+    // Lock contention — defer to the guarded wrapper
+        return metrics;
   }
 
-  console.log(`[Sync Engine] Draining ${pending.length} outbox mutations.`);
+  // For the internal drain, we manage lock state only when useLock=true
+  if (useLock) {
+    isSyncInProgress = true;
+  }
 
-  for (const entry of pending) {
-    try {
-      await processOutboxMutation(entry);
-      metrics.success++;
-    } catch {
-      metrics.failed++;
+  try {
+    const pending = await getNextPendingMutations(limit);
+    if (pending.length === 0) {
+      return metrics;
+    }
+
+    
+    for (const entry of pending) {
+      try {
+        const synced = await processOutboxEntryWithBackoff(entry);
+        if (synced) {
+          metrics.success++;
+        } else {
+          metrics.failed++;
+        }
+      } catch {
+        metrics.failed++;
+      }
+    }
+
+        return metrics;
+  } finally {
+    if (useLock) {
+      isSyncInProgress = false;
+      // Resolve any waiting deferred caller
+      if (pendingSyncResolve) {
+        const resolver = pendingSyncResolve;
+        pendingSyncResolve = null;
+        resolver();
+      }
     }
   }
-
-  console.log(
-    `[Sync Engine] Outbox drain complete: ${metrics.success} synced, ${metrics.failed} failed.`,
-  );
-  return metrics;
 }
 
 // ── Web Helpers (for web platform fallback) ───────────────────────────────────
@@ -462,8 +596,7 @@ async function queueMutationWeb(
       updated_at: now,
     };
     safeLocalStorageSetItem(key, JSON.stringify(entry));
-    console.log(`[Sync Engine] Web mutation queued: ${action} ${tableName}#${recordId}`);
-    return now;
+        return now;
   } catch (error) {
     console.error('[Sync Engine] Web queueMutation failed:', error);
     return null;
@@ -472,10 +605,31 @@ async function queueMutationWeb(
 
 // ── Legacy Reconciliation (backward compatibility) ──────────────────────────────
 
+/**
+ * Adds async delay for exponential backoff.
+ */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Legacy reconciliation path with 5xx exponential backoff.
+ * This function is race-condition guarded: concurrent calls will be debounced.
+ */
+let legacySyncInProgress = false;
+
 export const syncOfflineCatchesToCloud = async (): Promise<{ success: number; failed: number }> => {
   const metrics = { success: 0, failed: 0 };
 
-  // Web path: pull unsynced items from localStorage fallback and upload them.
+  // Race condition guard: debounce concurrent legacy sync calls
+  if (legacySyncInProgress) {
+        return metrics;
+  }
+  legacySyncInProgress = true;
+
+  try {
+
+    // Web path: pull unsynced items from localStorage fallback and upload them.
   if (Platform.OS === 'web') {
     const rawCache = safeLocalStorageGetItem('fishlore_web_catches') || '[]';
     const pendingRecords = parseWebCatches(rawCache).filter((item) => item.synced === 0);
@@ -485,33 +639,55 @@ export const syncOfflineCatchesToCloud = async (): Promise<{ success: number; fa
     }
 
     for (const record of pendingRecords) {
-      try {
-        const { error } = await supabase.from('catches').insert([
-          {
-            species: record.species || '',
-            weight: record.weight ?? null,
-            length: record.length ?? null,
-            location_name: record.location_name || record.location || '',
-            created_at: new Date(record.timestamp).toISOString(),
-          },
-        ]);
+      let lastError: any = null;
+      let uploaded = false;
 
-        if (error) throw error;
+      for (let attempt = 0; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
+        try {
+          const { error } = await supabase.from('catches').insert([
+            {
+              species: record.species || '',
+              weight: record.weight ?? null,
+              length: record.length ?? null,
+              location_name: record.location_name || record.location || '',
+              created_at: new Date(record.timestamp).toISOString(),
+            },
+          ]);
 
-        const currentCache = parseWebCatches(safeLocalStorageGetItem('fishlore_web_catches') || '[]');
-        const updatedCache = currentCache.map((item) =>
-          item.id === record.id ? { ...item, synced: 1 } : item
-        );
-        safeLocalStorageSetItem('fishlore_web_catches', JSON.stringify(updatedCache));
-        metrics.success++;
-      } catch (cloudError) {
-        console.error(`Cloud upload failure for record ${record?.species ?? 'unknown'}:`, cloudError);
-        metrics.failed++;
+          if (error) throw error;
+
+          const currentCache = parseWebCatches(safeLocalStorageGetItem('fishlore_web_catches') || '[]');
+          const updatedCache = currentCache.map((item) =>
+            item.id === record.id ? { ...item, synced: 1 } : item
+          );
+          safeLocalStorageSetItem('fishlore_web_catches', JSON.stringify(updatedCache));
+          metrics.success++;
+          uploaded = true;
+          break;
+        } catch (cloudError) {
+          lastError = cloudError;
+
+          if (!is5xxError(cloudError) || attempt >= MAX_RETRY_ATTEMPTS) {
+            console.error(
+              `Cloud upload failure for record ${record?.species ?? 'unknown'}:`,
+              cloudError,
+            );
+            metrics.failed++;
+            break;
+          }
+
+          // 5xx error — apply backoff and retry
+          const backoffDelay = getBackoffDelay(attempt);
+          console.warn(
+            `[Sync Engine] 5xx error on web catch ${record.id} (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}). ` +
+            `Backing off ${backoffDelay}ms.`,
+          );
+          await delay(backoffDelay);
+        }
       }
     }
 
-    console.log(`[Sync Engine] Web sync run finished. Dispatched: ${metrics.success}, Suspended: ${metrics.failed}`);
-    return metrics;
+        return metrics;
   }
 
   // Native path: drain the local SQLite offline cache.
@@ -556,42 +732,68 @@ export const syncOfflineCatchesToCloud = async (): Promise<{ success: number; fa
     return metrics;
   }
 
-  for (const record of pendingRecords) {
-    try {
-      const { error } = await supabase.from('catches').insert([
-        {
-          species: record.species || '',
-          weight: record.weight ?? null,
-          length: record.length ?? null,
-          location_name: record.location_name || record.location || '',
-          created_at: new Date(record.timestamp).toISOString(),
-        },
-      ]);
+    for (const record of pendingRecords) {
+    let lastError: any = null;
 
-      if (error) throw error;
+    for (let attempt = 0; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
+      try {
+        const { error } = await supabase.from('catches').insert([
+          {
+            species: record.species || '',
+            weight: record.weight ?? null,
+            length: record.length ?? null,
+            location_name: record.location_name || record.location || '',
+            created_at: new Date(record.timestamp).toISOString(),
+          },
+        ]);
 
-      const db = await import('expo-sqlite').then((m) => m.openDatabaseAsync('fishlore_offline.db')).catch(() => {
-        throw new Error('native db reopen failed');
-      });
-      await db.runAsync('UPDATE offline_catches SET synced = 1 WHERE id = ?;', [record.id]);
-      metrics.success++;
-    } catch (cloudError) {
-      console.error(`Cloud upload failure for record ${record?.species ?? 'unknown'}:`, cloudError);
-      metrics.failed++;
+        if (error) throw error;
+
+        const db = await import('expo-sqlite').then((m) => m.openDatabaseAsync('fishlore_offline.db')).catch(() => {
+          throw new Error('native db reopen failed');
+        });
+        await db.runAsync('UPDATE offline_catches SET synced = 1 WHERE id = ?;', [record.id]);
+        metrics.success++;
+        break;
+      } catch (cloudError) {
+        lastError = cloudError;
+
+        if (!is5xxError(cloudError) || attempt >= MAX_RETRY_ATTEMPTS) {
+          console.error(
+            `Cloud upload failure for record ${record?.species ?? 'unknown'}:`,
+            cloudError,
+          );
+          metrics.failed++;
+          break;
+        }
+
+        // 5xx error — apply backoff and retry
+        const backoffDelay = getBackoffDelay(attempt);
+        console.warn(
+          `[Sync Engine] 5xx error on native catch ${record.id} (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}). ` +
+          `Backing off ${backoffDelay}ms.`,
+        );
+        await delay(backoffDelay);
+      }
     }
   }
 
-  console.log(`[Sync Engine] Native sync run finished. Dispatched: ${metrics.success}, Suspended: ${metrics.failed}`);
-  return metrics;
-};
+    return metrics;
+} finally {
+  legacySyncInProgress = false;
+}};
 
 // Reconciliation sweeper: runs on foregrounding and on a repeating interval
 // so the offline queue drains whenever connectivity returns.
-export const startBackgroundReconciliation = (intervalMs = 60_000): () => void => {
+// Uses race-condition-guarded drainOutboxGuarded() to prevent duplicates.
+export const startBackgroundReconciliation = (intervalMs = 60_000): (() => void) => {
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const run = async () => {
     try {
+      // Drain the outbox (Tier 1 path) — this is race-condition guarded
+      await drainOutboxGuarded();
+      // Also run legacy reconciliation for backward compatibility
       await syncOfflineCatchesToCloud();
     } catch (err) {
       console.warn('[Sync Engine] reconciliation sweep failed:', err);

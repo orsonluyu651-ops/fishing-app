@@ -71,8 +71,7 @@ export async function compressFeedVideo(
 
   // ── Web fallback: native FS + encoder unavailable, return a mock passthrough ─
   if (Platform.OS === 'web') {
-    console.log('[Media Pipeline] Web platform — skipping native video compression.');
-    return {
+        return {
       uri: sourceUri,
       sizeInBytes: 0,
       duration: endTime && startTime ? endTime - startTime : 0,
@@ -105,16 +104,10 @@ export async function compressFeedVideo(
     );
   }
 
-  console.log(
-    `[Media Pipeline] Source video: ${sourceUri} — ${sourceStat.size} bytes`,
-  );
-
+  
   // ── Fast-path: skip compression if small + high quality ──────────────────
   if (sourceStat.size < SIZE_THRESHOLD_50MB && quality === 'high') {
-    console.log(
-      '[Media Pipeline] Skipping compression (under 50 MB + high quality fast-path)',
-    );
-    const destPath = `${RNFS.CachesDirectoryPath}/${generateTempName(
+        const destPath = `${RNFS.CachesDirectoryPath}/${generateTempName(
       sourceUri,
       'copied',
     )}`;
@@ -145,10 +138,7 @@ export async function compressFeedVideo(
       NSURLIsExcludedFromBackupKey: true, // iOS: keep out of iCloud backups
     });
 
-    console.log(
-      `[Media Pipeline] Compressing video to: ${outputDir} (quality: ${quality})`,
-    );
-
+    
         const VideoHelper = getVideoHelper();
     if (!VideoHelper) {
       throw new Error(

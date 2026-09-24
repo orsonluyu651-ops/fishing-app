@@ -279,18 +279,9 @@ export function AnglerCopilotCard({
     description: string;
   } | null => {
     const key = query.toLowerCase().trim();
-    if (SUBURB_COORDS[key]) {
-      console.log(
-        '[Copilot Refinement Complete] Suburb resolved:',
-        key,
-        SUBURB_COORDS[key],
-      );
+        if (SUBURB_COORDS[key]) {
       return SUBURB_COORDS[key];
     }
-    console.log(
-      '[Copilot Refinement Complete] No coordinate match for suburb:',
-      query,
-    );
     return null;
   };
 
@@ -316,7 +307,7 @@ export function AnglerCopilotCard({
    * On success, overrides the incoming props with the device's exact coords.
    */
   const requestDeviceLocation = async (): Promise<void> => {
-    console.log('[Copilot Chat] Requesting device location permission...');
+
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
@@ -329,9 +320,8 @@ export function AnglerCopilotCard({
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
       };
-      setDeviceCoords(coords);
+            setDeviceCoords(coords);
       setUseDeviceLocation(true);
-      console.log('[Copilot Chat] Device location acquired:', coords);
     } catch (error) {
       console.error('[Copilot Chat] Failed to acquire device location:', error);
       setUseDeviceLocation(false);
@@ -369,13 +359,13 @@ export function AnglerCopilotCard({
         description: coords.description,
       });
       setSuburbLabel(null);
-      console.log('[Copilot Refinement Complete] Suburb search resolved to coords:', coords);
+
     } else {
       // No coordinate match — use as a custom header override label
       setSuburbCoords(null);
       setSuburbMeta(null);
       setSuburbLabel(trimmed);
-      console.log('[Copilot Refinement Complete] Using custom suburb label:', trimmed);
+
     }
   };
 
@@ -444,7 +434,7 @@ export function AnglerCopilotCard({
       return;
     }
 
-    console.log('[Copilot Chat] User asked:', trimmed);
+
     appendMessage('user', trimmed);
     setChatInput('');
     setIsResponding(true);
@@ -605,7 +595,7 @@ export function AnglerCopilotCard({
             onPress={async () => {
               if (useDeviceLocation) {
                 setUseDeviceLocation(false);
-                console.log('[Copilot Chat] Location switch turned OFF — using hotspot coords.');
+
               } else {
                 await requestDeviceLocation();
               }
@@ -637,7 +627,7 @@ export function AnglerCopilotCard({
               onPress={async () => {
                 if (useDeviceLocation) {
                   setUseDeviceLocation(false);
-                  console.log('[Copilot Layout Complete] Live GPS toggle turned OFF.');
+
                 } else {
                   await requestDeviceLocation();
                 }

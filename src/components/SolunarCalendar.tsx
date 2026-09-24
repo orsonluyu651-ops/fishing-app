@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo, memo } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   ScrollView,
   Dimensions,
+  Animated,
+  Easing,
 } from 'react-native';
 import {
   CalendarForecastEntry,
@@ -16,6 +18,22 @@ import { Coordinates } from './SolunarForecaster';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const DAY_CARD_WIDTH = 100;
+
+const COLORS = {
+  bg: '#0f172a',
+  card: '#1e293b',
+  border: '#334155',
+  text: '#f1f5f9',
+  muted: '#94a3b8',
+  accent: '#38bdf8',
+  peak: '#10b981',
+  good: '#38bdf8',
+  avg: '#fbbf24',
+  poor: '#ef4444',
+  brandSecondary: '#273449',
+  textMutedDark: '#64748b',
+  textMutedLight: '#cbd5e1',
+} as const;
 
 export interface SolunarCalendarProps {
   coordinates?: Coordinates;
@@ -30,15 +48,110 @@ function ratingText(rating: string): 'PEAK BITING WINDOW' | 'GOOD' | 'AVERAGE' |
   return 'POOR';
 }
 
+// ── ShimmerPlaceholder: continuous fade cycle for skeleton loading ─────
+const ShimmerPlaceholder = memo(({ width, height, borderRadius }: { width: number; height: number; borderRadius?: number }) => {
+  const shimmerAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmerAnim, {
+          toValue: 1,
+          duration: 900,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(shimmerAnim, {
+          toValue: 0,
+          duration: 900,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+      { iterations: -1 },
+    ).start();
+  }, [shimmerAnim]);
+
+  const opacity = shimmerAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.25, 0.6],
+  });
+
+  return (
+    <Animated.View
+      style={{
+        width,
+        height,
+        borderRadius: borderRadius ?? 4,
+        backgroundColor: COLORS.border,
+        opacity,
+      }}
+    />
+  );
+});
+ShimmerPlaceholder.displayName = 'ShimmerPlaceholder';
+
+// ── Memoized DayCard ─────────────────────────────────────────────────────
+interface DayCardProps {
+  entry: CalendarForecastEntry;
+  isSelected: boolean;
+  onPress: (entry: CalendarForecastEntry) => void;
+}
+
+const DayCard = memo(({ entry, isSelected, onPress }: DayCardProps) => {
+  const dayDate = useMemo(() => new Date(entry.date), [entry.date]);
+  const dayNames = dayDate.toLocaleDateString('en-AU', { weekday: 'short' });
+  const dayNum = dayDate.getDate();
+  const monthName = dayDate.toLocaleDateString('en-AU', { month: 'short' });
+
+    const ratingKey = entry.rating.replace(' BITING WINDOW', '') as 'PEAK' | 'GOOD' | 'AVERAGE' | 'POOR';
+  const ratingColorMap: Record<typeof ratingKey, string> = {
+    PEAK: COLORS.peak,
+    GOOD: COLORS.good,
+    AVERAGE: COLORS.avg,
+    POOR: COLORS.poor,
+  };
+  const ratingColor = ratingColorMap[ratingKey] || COLORS.poor;
+
+  return (
+    <TouchableOpacity
+      style={[styles.dayCard, isSelected && styles.dayCardSelected]}
+      onPress={() => onPress(entry)}
+      activeOpacity={0.7}
+    >
+      <Text style={styles.dayName}>{dayNames}</Text>
+      <Text style={styles.dayNum}>{dayNum}</Text>
+      <Text style={styles.monthLabel}>{monthName}</Text>
+      <Text style={styles.moonIcon}>{entry.moonIcon}</Text>
+      <View style={styles.activityBarContainer}>
+        <View style={[styles.activityBarFill, { width: `${Math.round(entry.activityIndex)}%`, backgroundColor: ratingColor }]} />
+      </View>
+      <Text style={styles.activityIndex}>{entry.activityIndex}%</Text>
+      {entry.peakStartTime && <Text style={styles.peakTag}>PEAK</Text>}
+    </TouchableOpacity>
+  );
+}, (prev, next) =>
+  prev.entry.date === next.entry.date &&
+  prev.entry.activityIndex === next.entry.activityIndex &&
+  prev.entry.rating === next.entry.rating &&
+  prev.isSelected === next.isSelected,
+);
+DayCard.displayName = 'DayCard';
+
+
+
 export default function SolunarCalendar({
   coordinates,
   initialDate = new Date(),
   onDaySelect,
 }: SolunarCalendarProps) {
-  const [entries, setEntries] = useState<CalendarForecastEntry[]>([]);
+    const [entries, setEntries] = useState<CalendarForecastEntry[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date>(initialDate);
   const [loading, setLoading] = useState(true);
   const [currentMonth, setCurrentMonth] = useState(() => initialDate.getMonth());
+
+  // Accordion chevron rotation animation for detail view
+  const chevronAnim = useRef(new Animated.Value(0)).current;
 
   const coords: Coordinates = coordinates || { latitude: -27.9625, longitude: 153.4264 };
 
@@ -60,23 +173,51 @@ export default function SolunarCalendar({
     }
   }, [coords]);
 
-  const handleDayPress = (entry: CalendarForecastEntry) => {
+  const handleDayPress = useCallback((entry: CalendarForecastEntry) => {
     const date = new Date(entry.date);
     setSelectedDate(date);
     setCurrentMonth(date.getMonth());
+    Animated.timing(chevronAnim, {
+      toValue: 1,
+      duration: 320,
+      easing: Easing.bezier(0.4, 0, 0.2, 1),
+      useNativeDriver: true,
+    }).start();
     onDaySelect?.(entry);
-  };
+  }, [onDaySelect, chevronAnim]);
 
-  const goToMonth = (dir: -1 | 1) => {
+  const goToMonth = useCallback((dir: -1 | 1) => {
     const newDate = new Date(selectedDate);
     newDate.setMonth(newDate.getMonth() + dir);
     setCurrentMonth(newDate.getMonth());
     setSelectedDate(newDate);
-  };
+    Animated.timing(chevronAnim, {
+      toValue: 0,
+      duration: 280,
+      easing: Easing.bezier(0.4, 0, 0.2, 1),
+      useNativeDriver: true,
+    }).start();
+  }, [selectedDate, chevronAnim]);
 
-  const selectedEntry = entries.find((e) => {
-    const d = new Date(e.date);
-    return d.toDateString() === selectedDate.toDateString();
+  const selectedEntry = useMemo(
+    () => entries.find((e) => {
+      const d = new Date(e.date);
+      return d.toDateString() === selectedDate.toDateString();
+    }),
+    [entries, selectedDate],
+  );
+
+  const monthTitle = useMemo(
+    () => new Date(2025, currentMonth, 1).toLocaleDateString('en-AU', {
+      month: 'long',
+      year: 'numeric',
+    }),
+    [currentMonth],
+  );
+
+  const chevronRotate = chevronAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '180deg'],
   });
 
   return (
@@ -86,12 +227,7 @@ export default function SolunarCalendar({
         <TouchableOpacity onPress={() => goToMonth(-1)} style={styles.monthNavBtn}>
           <Text style={styles.monthNavText}>‹</Text>
         </TouchableOpacity>
-        <Text style={styles.monthTitle}>
-          {new Date(2025, currentMonth, 1).toLocaleDateString('en-AU', {
-            month: 'long',
-            year: 'numeric',
-          })}
-        </Text>
+        <Text style={styles.monthTitle}>{monthTitle}</Text>
         <TouchableOpacity onPress={() => goToMonth(1)} style={styles.monthNavBtn}>
           <Text style={styles.monthNavText}>›</Text>
         </TouchableOpacity>
@@ -99,9 +235,13 @@ export default function SolunarCalendar({
 
       {loading ? (
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading 30-day forecast…</Text>
+          <View style={styles.shimmerRow}>
+            {[...Array(6)].map((_, i) => (
+              <ShimmerPlaceholder key={i} width={80} height={100} borderRadius={12} />
+            ))}
+          </View>
         </View>
-            ) : (
+      ) : (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -109,47 +249,27 @@ export default function SolunarCalendar({
         >
           {entries.slice(0, 30).map((entry) => {
             const dayDate = new Date(entry.date);
-            const dayNames = dayDate.toLocaleDateString('en-AU', { weekday: 'short' });
-            const dayNum = dayDate.getDate();
-            const monthName = dayDate.toLocaleDateString('en-AU', { month: 'short' });
             const isSelected = dayDate.toDateString() === selectedDate.toDateString();
-            const ratingColors: Record<string, any> = {
-              PEAK: styles.ratingPeak,
-              GOOD: styles.ratingGood,
-              AVERAGE: styles.ratingAvg,
-              POOR: styles.ratingPoor,
-            };
-
             return (
-              <TouchableOpacity
+              <DayCard
                 key={entry.isoDate}
-                onPress={() => handleDayPress(entry)}
-                style={[styles.dayCard, isSelected && styles.dayCardSelected]}
-              >
-                <Text style={styles.dayName}>{dayNames}</Text>
-                <Text style={styles.dayNum}>{dayNum}</Text>
-                <Text style={styles.monthLabel}>{monthName}</Text>
-                <Text style={styles.moonIcon}>{entry.moonIcon}</Text>
-                <View style={styles.activityBarContainer}>
-                  <View
-                    style={[
-                      styles.activityBarFill,
-                      { width: `${Math.round(entry.activityIndex)}%` } as any,
-                      ratingColors[entry.rating.replace(' BITING WINDOW', '')] || styles.ratingPoor,
-                    ]}
-                  />
-                </View>
-                <Text style={styles.activityIndex}>{entry.activityIndex}%</Text>
-                {entry.peakStartTime && <Text style={styles.peakTag}>PEAK</Text>}
-              </TouchableOpacity>
+                entry={entry}
+                isSelected={isSelected}
+                onPress={handleDayPress}
+              />
             );
           })}
         </ScrollView>
       )}
 
-      {/* Detail View for Selected Day */}
+            {/* Detail View for Selected Day with accordion chevron rotation */}
       {selectedEntry && !loading && (
-        <ScrollView style={styles.detailContainer} showsVerticalScrollIndicator={false}>
+        <Animated.View
+          style={[
+            styles.detailContainer,
+            { transform: [{ rotate: chevronRotate }] },
+          ]}
+        >
           <View style={styles.detailHeader}>
             <Text style={styles.detailDate}>
               {new Date(selectedEntry.date).toLocaleDateString('en-AU', {
@@ -159,7 +279,9 @@ export default function SolunarCalendar({
                 year: 'numeric',
               })}
             </Text>
-            <Text style={styles.detailMoonIcon}>{selectedEntry.moonIcon}</Text>
+            <Animated.Text style={{ fontSize: 32, transform: [{ rotate: chevronRotate }] }}>
+              {selectedEntry.moonIcon}
+            </Animated.Text>
           </View>
 
           <View style={styles.detailActivityRow}>
@@ -208,18 +330,18 @@ export default function SolunarCalendar({
               <Text style={styles.peakTimeValue}>{selectedEntry.peakStartTime}</Text>
             </View>
           )}
-        </ScrollView>
+        </Animated.View>
       )}
-        </View>
-  );
+    </View>
+    );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ── Styles ──
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f172a',
+    backgroundColor: COLORS.bg,
     padding: 12,
   },
   monthHeader: {
@@ -232,17 +354,17 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#1e293b',
+    backgroundColor: COLORS.card,
     alignItems: 'center',
     justifyContent: 'center',
   },
   monthNavText: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 20,
     fontWeight: '600',
   },
   monthTitle: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 18,
     fontWeight: '600',
   },
@@ -253,32 +375,32 @@ const styles = StyleSheet.create({
   },
   dayCard: {
     width: DAY_CARD_WIDTH,
-    backgroundColor: '#1e293b',
+    backgroundColor: COLORS.card,
     borderRadius: 12,
     padding: 8,
     alignItems: 'center',
     gap: 4,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: COLORS.border,
   },
   dayCardSelected: {
     borderWidth: 2,
-    borderColor: '#38bdf8',
-    backgroundColor: '#273449',
+    borderColor: COLORS.accent,
+    backgroundColor: COLORS.brandSecondary,
   },
   dayName: {
     fontSize: 12,
-    color: '#94a3b8',
+    color: COLORS.muted,
     fontWeight: '600',
   },
   dayNum: {
     fontSize: 18,
-    color: '#ffffff',
+    color: COLORS.text,
     fontWeight: '700',
   },
   monthLabel: {
     fontSize: 10,
-    color: '#64748b',
+    color: COLORS.textMutedDark,
   },
   moonIcon: {
     fontSize: 22,
@@ -286,7 +408,7 @@ const styles = StyleSheet.create({
   activityBarContainer: {
     width: '100%',
     height: 4,
-    backgroundColor: '#334155',
+    backgroundColor: COLORS.border,
     borderRadius: 2,
     overflow: 'hidden',
     marginTop: 2,
@@ -297,28 +419,35 @@ const styles = StyleSheet.create({
   },
   activityIndex: {
     fontSize: 10,
-    color: '#cbd5e1',
+    color: COLORS.textMutedLight,
     fontWeight: '600',
   },
   peakTag: {
     fontSize: 9,
-    color: '#fbbf24',
+    color: COLORS.avg,
     fontWeight: '700',
     letterSpacing: 0.5,
   },
-  loadingContainer: {
+    loadingContainer: {
     padding: 24,
     alignItems: 'center',
   },
   loadingText: {
-    color: '#94a3b8',
+    color: COLORS.muted,
     fontSize: 14,
+    marginBottom: 12,
+  },
+  shimmerRow: {
+    flexDirection: 'row',
+    gap: 8,
   },
   detailContainer: {
     marginTop: 12,
-    backgroundColor: '#1e293b',
+    backgroundColor: COLORS.card,
     borderRadius: 16,
     padding: 16,
+    borderColor: COLORS.border,
+    borderWidth: 1,
   },
   detailHeader: {
     flexDirection: 'row',
@@ -327,7 +456,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   detailDate: {
-    color: '#ffffff',
+    color: COLORS.text,
     fontSize: 16,
     fontWeight: '600',
     flex: 1,
@@ -342,7 +471,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   detailActivityLabel: {
-    color: '#94a3b8',
+    color: COLORS.muted,
     fontSize: 14,
   },
   detailActivityValue: {
@@ -367,15 +496,15 @@ const styles = StyleSheet.create({
   },
   windowStatValue: {
     fontSize: 16,
-    color: '#ffffff',
+    color: COLORS.text,
     fontWeight: '600',
   },
   windowStatLabel: {
     fontSize: 11,
-    color: '#94a3b8',
+    color: COLORS.muted,
   },
   peakTimeBox: {
-    backgroundColor: '#0f172a',
+    backgroundColor: COLORS.bg,
     borderRadius: 12,
     padding: 12,
     alignItems: 'center',
@@ -383,16 +512,16 @@ const styles = StyleSheet.create({
   },
   peakTimeLabel: {
     fontSize: 12,
-    color: '#fbbf24',
+    color: COLORS.avg,
     fontWeight: '600',
   },
   peakTimeValue: {
     fontSize: 16,
-    color: '#ffffff',
+    color: COLORS.text,
     fontWeight: '700',
   },
-  ratingPeak: { color: '#10b981' },
-  ratingGood: { color: '#38bdf8' },
-  ratingAvg: { color: '#fbbf24' },
-  ratingPoor: { color: '#ef4444' },
+  ratingPeak: { color: COLORS.peak },
+  ratingGood: { color: COLORS.accent },
+  ratingAvg: { color: COLORS.avg },
+  ratingPoor: { color: COLORS.poor },
 });

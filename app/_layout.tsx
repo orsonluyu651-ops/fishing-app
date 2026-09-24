@@ -3,6 +3,9 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, ErrorUtils, StyleSheet, View, Alert } from 'react-native';
 import { Slot, useRouter, useSegments } from 'expo-router';
 import * as Linking from 'expo-linking';
+import * as SplashScreen from 'expo-splash-screen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics';
 import { supabase } from '../src/lib/supabase';
 import { attachNotificationRouting } from '../src/lib/notifications';
 import { registerBackgroundCatchSync } from '../src/lib/backgroundSync';
@@ -66,6 +69,21 @@ export default function RootLayout() {
   const segments = useSegments();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [splashVisible, setSplashVisible] = useState(true);
+
+  // Hide the native splash screen once the app is ready.
+  useEffect(() => {
+    async function hideSplash() {
+      try {
+        await SplashScreen.hideAsync();
+      } catch (e) {
+        // Splash already hidden or not visible
+      } finally {
+        setSplashVisible(false);
+      }
+    }
+    hideSplash();
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {

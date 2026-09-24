@@ -1,7 +1,17 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+  Animated,
+  Easing,
+} from 'react-native';
 import { supabase } from '../../src/lib/supabase';
 import { useRouter } from 'expo-router';
+import { AnimatedInput, COLORS } from '../../src/components/AnimatedInput';
 
 export default function SignUp() {
   const [email, setEmail] = useState('');
@@ -10,7 +20,27 @@ export default function SignUp() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  async function handleSignUp() {
+  const formOpacity = useRef(new Animated.Value(0)).current;
+  const formTranslateY = useRef(new Animated.Value(20)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(formOpacity, {
+        toValue: 1,
+        duration: 600,
+        easing: Easing.bezier(0.4, 0, 0.2, 1),
+        useNativeDriver: true,
+      }),
+      Animated.timing(formTranslateY, {
+        toValue: 0,
+        duration: 600,
+        easing: Easing.bezier(0.4, 0, 0.2, 1),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [formOpacity, formTranslateY]);
+
+  const handleSignUp = useCallback(async () => {
     if (!email || !password || !username) {
       Alert.alert('Error', 'Please fill in all fields');
       return;
@@ -21,9 +51,7 @@ export default function SignUp() {
       email,
       password,
       options: {
-        data: {
-          username: username,
-        },
+        data: { username: username },
       },
     });
 
@@ -34,39 +62,63 @@ export default function SignUp() {
       router.replace('/(auth)/sign-in');
     }
     setLoading(false);
-  }
+  }, [email, password, username, router]);
+
+  const handleNavigateToSignIn = useCallback(() => {
+    router.replace('/(auth)/sign-in');
+  }, [router]);
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Create Account</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Username"
-        value={username}
-        onChangeText={setUsername}
-        autoCapitalize="none"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        value={email}
-        onChangeText={setEmail}
-        autoCapitalize="none"
-        keyboardType="email-address"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-      />
-      <TouchableOpacity style={styles.button} onPress={handleSignUp} disabled={loading}>
-        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Sign Up</Text>}
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => router.replace('/(auth)/sign-in')}>
-        <Text style={styles.linkText}>Already have an account? Sign In</Text>
-      </TouchableOpacity>
+      <Animated.View
+        style={[
+          styles.formContainer,
+          { opacity: formOpacity, transform: [{ translateY: formTranslateY }] },
+        ]}
+      >
+        <Text style={styles.title}>Create Account</Text>
+        <Text style={styles.subtitle}>Start your fishing journey</Text>
+
+        <AnimatedInput
+          label="Username"
+          value={username}
+          onChangeText={setUsername}
+          autoCapitalize="none"
+          placeholder="Your angler name"
+        />
+        <AnimatedInput
+          label="Email"
+          value={email}
+          onChangeText={setEmail}
+          autoCapitalize="none"
+          keyboardType="email-address"
+          placeholder="you@anglers.app"
+        />
+        <AnimatedInput
+          label="Password"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+        />
+
+        <TouchableOpacity
+          style={[styles.button, loading && styles.buttonDisabled]}
+          onPress={handleSignUp}
+          disabled={loading}
+          activeOpacity={0.8}
+        >
+          {loading ? (
+            <ActivityIndicator color={COLORS.bg} />
+          ) : (
+            <Text style={styles.buttonText}>Sign Up</Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={handleNavigateToSignIn} activeOpacity={0.7}>
+          <Text style={styles.linkText}>Already have an account? Sign In</Text>
+        </TouchableOpacity>
+      </Animated.View>
     </View>
   );
 }
@@ -76,38 +128,38 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     padding: 20,
-    backgroundColor: '#fff',
+    backgroundColor: COLORS.bg,
   },
+  formContainer: { gap: 4 },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
+    fontSize: 28,
+    fontWeight: '800',
+    marginBottom: 6,
+    color: COLORS.text,
     textAlign: 'center',
   },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    padding: 15,
-    borderRadius: 8,
-    marginBottom: 15,
-    fontSize: 16,
+  subtitle: {
+    fontSize: 14,
+    color: COLORS.muted,
+    textAlign: 'center',
+    marginBottom: 24,
   },
   button: {
-    backgroundColor: '#007AFF',
-    padding: 15,
-    borderRadius: 8,
+    backgroundColor: COLORS.accent,
+    paddingVertical: 15,
+    borderRadius: 14,
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 8,
+    minHeight: 50,
+    justifyContent: 'center',
   },
-  buttonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
-  },
+  buttonDisabled: { opacity: 0.6 },
+  buttonText: { color: COLORS.bg, fontSize: 16, fontWeight: '700' },
   linkText: {
     textAlign: 'center',
     marginTop: 20,
-    color: '#007AFF',
-    fontSize: 16,
+    color: COLORS.accent,
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

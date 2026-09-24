@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo, memo } from 'react';
 import {
   Platform,
   Alert,
@@ -128,6 +128,56 @@ const getSolunarBadge = (rating: string | null): SolunarBadge => {
   }
 };
 
+// ── Memoized CatchMarker: prevents re-render when pin data is unchanged ─────
+interface CatchMarkerProps {
+  pin: CatchPin;
+  badge: SolunarBadge;
+}
+
+const CatchMarker = memo(({ pin, badge }: CatchMarkerProps) => {
+  return (
+    <Marker
+      key={`catch-${pin.id}`}
+      coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
+      pinColor="#0d9488"
+    >
+      <Callout style={styles.calloutContainer} tooltip={false}>
+        <View style={styles.calloutBubble}>
+          <Text style={styles.calloutHeading}>
+            {pin.species}
+            {pin.weight ? ` • ${pin.weight}` : ''}
+            {pin.length ? ` · ${pin.length}cm` : ''}
+          </Text>
+          <View style={[styles.solunarBadge, { backgroundColor: badge.color }]}>
+            <Text style={styles.solunarBadgeText}>
+              {badge.emoji} {pin.solunar_rating || 'UNKNOWN'}
+            </Text>
+          </View>
+          <View style={styles.calloutMetaRow}>
+            <Text style={styles.calloutMetaText}>📍 {pin.location_name}</Text>
+            <Text style={styles.calloutMetaText}>
+              📅 {new Date(pin.timestamp).toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              })}
+            </Text>
+          </View>
+        </View>
+      </Callout>
+    </Marker>
+  );
+}, (prev, next) =>
+  prev.pin.id === next.pin.id &&
+  prev.pin.species === next.pin.species &&
+  prev.pin.weight === next.pin.weight &&
+  prev.pin.length === next.pin.length &&
+  prev.pin.solunar_rating === next.pin.solunar_rating,
+);
+CatchMarker.displayName = 'CatchMarker';
+
+
+
 export default function FishingMapScreen() {
   const mapRef = useRef<MapView | null>(null);
   const [pins, setPins] = useState<CatchPin[]>([]);
@@ -174,62 +224,24 @@ export default function FishingMapScreen() {
 
   return (
     <View style={styles.container}>
-      <MapView
+            <MapView
         ref={mapRef}
         style={styles.map}
-        provider={undefined}  // iOS: native Apple Maps engine (avoids Google billing); Android: default Google provider
+        provider={undefined}
         initialRegion={GOLD_COAST_REGION}
         toolbarEnabled={false}
         showsCompass={false}
         onLongPress={handleLongPress}
       >
-                        {pins.map((pin) => {
+        {pins.map((pin) => {
           const badge = getSolunarBadge(pin.solunar_rating);
-          return (
-            <Marker
-              key={`catch-${pin.id}`}
-              coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
-              pinColor="#0d9488"
-            >
-              <Callout style={styles.calloutContainer} tooltip={false}>
-                <View style={styles.calloutBubble}>
-                  {/* Bold heading: species + size metrics */}
-                  <Text style={styles.calloutHeading}>
-                    {pin.species}
-                    {pin.weight ? ` • ${pin.weight}` : ''}
-                    {pin.length ? ` · ${pin.length}cm` : ''}
-                  </Text>
-
-                  {/* Color-coded solunar badge bubble */}
-                  <View style={[styles.solunarBadge, { backgroundColor: badge.color }]}>
-                    <Text style={styles.solunarBadgeText}>
-                      {badge.emoji} {pin.solunar_rating || 'UNKNOWN'}
-                    </Text>
-                  </View>
-
-                  {/* Metadata row: location + localized date */}
-                  <View style={styles.calloutMetaRow}>
-                    <Text style={styles.calloutMetaText}>
-                      📍 {pin.location_name}
-                    </Text>
-                    <Text style={styles.calloutMetaText}>
-                      📅 {new Date(pin.timestamp).toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                        year: 'numeric',
-                      })}
-                    </Text>
-                  </View>
-                </View>
-              </Callout>
-            </Marker>
-          );
+          return <CatchMarker key={`catch-${pin.id}`} pin={pin} badge={badge} />;
         })}
       </MapView>
 
       {loading && (
         <View style={styles.overlay}>
-          <ActivityIndicator color="#0284c7" />
+                    <ActivityIndicator color="#38bdf8" />
           <Text style={styles.overlayText}>Loading catch pins…</Text>
         </View>
       )}
@@ -251,7 +263,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.85)',
   },
-  overlayText: { marginTop: 12, color: '#0284c7', fontSize: 13, fontWeight: '600' },
+  overlayText: { marginTop: 12,     color: '#38bdf8', fontSize: 13, fontWeight: '600' },
   legend: {
     position: 'absolute',
     bottom: 24,

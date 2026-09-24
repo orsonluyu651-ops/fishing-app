@@ -106,17 +106,14 @@ export function sanitizeLocationForExport(
   customLabel?: string,
 ): string {
   if (customLabel && customLabel.trim().length > 0) {
-    console.log('[Catch Share Export] Using custom location label:', customLabel);
-    return customLabel.trim();
+        return customLabel.trim();
   }
 
   if (location.region && location.region.trim().length > 0) {
-    console.log('[Catch Share Export] Using regional label:', location.region);
-    return location.region.trim();
+        return location.region.trim();
   }
 
-    console.log('[Catch Share Export] No location label provided, defaulting to "Secret Spot".');
-  return 'Secret Spot';
+      return 'Secret Spot';
 }
 
 // ── Card Builder ──────────────────────────────────────────────────────────────
@@ -151,9 +148,7 @@ export function buildCatchCardExport(input: CatchCardInput): CatchCardExport {
 
   const shareUrl = input.videoUrl && input.videoUrl.startsWith('file://') ? input.videoUrl : null;
 
-  console.log('[Catch Share Export] Card compiled for species:', input.species);
-  console.log('[Catch Share Export] Privacy-safe location label:', shareableLocation);
-
+    
     return {
     title: `${input.species}${weightStr}`,
     shareText,
@@ -172,8 +167,7 @@ export function buildCatchCardExport(input: CatchCardInput): CatchCardExport {
  * @throws       - Re-throws if the share sheet cannot be opened.
  */
 export async function shareCatchCard(input: CatchCardInput): Promise<void> {
-  console.log('[Catch Share Export] shareCatchCard invoked for catch ID:', input.id);
-
+  
   try {
     const card = buildCatchCardExport(input);
 
@@ -184,8 +178,7 @@ export async function shareCatchCard(input: CatchCardInput): Promise<void> {
             imageUrl: card.shareUrl ?? undefined,
     });
 
-    console.log('[Catch Share Export] Share sheet presented successfully.');
-  } catch (err: unknown) {
+      } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[Catch Share Export] Share failed:', msg);
     Alert.alert('Sharing Unavailable', 'Could not open the system share sheet.');
@@ -202,8 +195,7 @@ import { VideoItem } from '../components/FishTokFeed';
  * compressed video asset reference.
  */
 export async function shareVideoItemCatch(item: VideoItem): Promise<void> {
-  console.log('[Catch Share Export] shareVideoItemCatch invoked for item:', item.id);
-
+  
   const species = item.speciesTags.length > 0 ? item.speciesTags[0] : item.title.split('!')[0];
 
   const input: CatchCardInput = {
