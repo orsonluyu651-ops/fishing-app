@@ -58,7 +58,7 @@ const calculateMoonPhase = (date: Date): number => {
  * Compute a simulated Activity Index (0–100) based on moon phase.
  * Peak activity occurs around full moon and new moon transitions.
  */
-const calculateActivityIndex = (moonPhase: number): number => {
+export const calculateActivityIndex = (moonPhase: number): number => {
   // Map moon phase to a 0–360 degree position
   const degrees = moonPhase * 360;
   // Activity peaks at 0° (new) and 180° (full), dips at 90° (first quarter) and 270° (last quarter)
@@ -70,9 +70,12 @@ const calculateActivityIndex = (moonPhase: number): number => {
 };
 
 /**
- * Map an Activity Index to a human-readable rating string.
+ * Convenience: get the solunar rating string for a given Date directly.
+ * Defaults to Gold Coast coordinates.
  */
-const getActivityRating = (index: number): SolunarDay['rating'] => {
+export const getSolunarRatingForDate = (date: Date = new Date()): 'POOR' | 'AVERAGE' | 'GOOD' | 'PEAK BITING WINDOW' => {
+  const phase = calculateMoonPhase(date);
+  const index = calculateActivityIndex(phase);
   if (index >= 80) return 'PEAK BITING WINDOW';
   if (index >= 60) return 'GOOD';
   if (index >= 40) return 'AVERAGE';
@@ -187,7 +190,7 @@ export const calculateSolunarDay = (
     coordinates,
     moonPhase,
     activityIndex,
-    rating: getActivityRating(activityIndex),
+      rating: getSolunarRatingForDate(date),
     majorWindows: calculateMajorWindows(date),
     minorWindows: calculateMinorWindows(date),
         tides: calculateTides(date, coordinates),

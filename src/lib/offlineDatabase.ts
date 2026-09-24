@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as SQLite from 'expo-sqlite';
+import { getSolunarRatingForDate } from '../components/SolunarForecaster';
 
 interface OfflineCatch {
   id?: number;
@@ -9,6 +10,7 @@ interface OfflineCatch {
   location_name: string;
   timestamp: number;
   synced: number; // 0 = pending, 1 = synced
+  solunar_rating?: string;
 }
 
 let nativeDb: any = null;
@@ -24,7 +26,7 @@ export const initOfflineDatabase = async (): Promise<void> => {
 
   try {
     nativeDb = await SQLite.openDatabaseAsync('fishlore_offline.db');
-    await nativeDb.execAsync(`
+        await nativeDb.execAsync(`
       PRAGMA journal_mode = WAL;
             CREATE TABLE IF NOT EXISTS offline_catches (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +37,8 @@ export const initOfflineDatabase = async (): Promise<void> => {
         timestamp INTEGER NOT NULL,
         synced INTEGER DEFAULT 0,
         latitude REAL,
-        longitude REAL
+        longitude REAL,
+        solunar_rating TEXT
       );
     `);
     // Idempotent schema guard: add geo columns to databases seeded before the
@@ -75,7 +78,7 @@ export const getOfflineCatchPins = async (): Promise<
   if (!nativeDb) return [];
   try {
     const rows = await nativeDb.getAllAsync(
-      'SELECT id, species, location_name, latitude, longitude FROM offline_catches WHERE latitude IS NOT NULL AND longitude IS NOT NULL;',
+      '     SELECT id, species, location_name, latitude, longitude, solunar_rating FROM offline_catches WHERE latitude IS NOT NULL AND longitude IS NOT NULL;',
     );
     return (rows || []).map((row: any) => ({
       id: String(row.id),
@@ -91,8 +94,11 @@ export const getOfflineCatchPins = async (): Promise<
 };
 
 export const queueOfflineCatch = async (catchLog: Omit<OfflineCatch, 'id' | 'synced'>): Promise<void> => {
+  // Auto-calculate the solunar activity rating for this catch's timestamp.
+  const solunarRating = getSolunarRatingForDate(new Date(catchLog.timestamp));
+
   if (Platform.OS === 'web') {
-    const webCache = JSON.stringify([...JSON.parse(localStorage.getItem('fishlore_web_catches') || '[]'), { ...catchLog, id: Date.now(), synced: 0 }]);
+    const webCache = JSON.stringify([...JSON.parse(localStorage.getItem('fishlore_web_catches') || '[]'), { ...catchLog, id: Date.now(), synced: 0, solunar_rating: solunarRating }]);
     localStorage.setItem('fishlore_web_catches', webCache);
     console.log('📦 Web Cache Synced:', catchLog.species);
     return;
@@ -101,8 +107,8 @@ export const queueOfflineCatch = async (catchLog: Omit<OfflineCatch, 'id' | 'syn
   if (!nativeDb) return;
   try {
     await nativeDb.runAsync(
-      'INSERT INTO offline_catches (species, weight, length, location_name, timestamp, synced) VALUES (?, ?, ?, ?, ?, 0);',
-      [catchLog.species, catchLog.weight || null, catchLog.length || null, catchLog.location_name, catchLog.timestamp]
+      'INSERT INTO offline_catches (species, weight, length, location_name, timestamp, synced, solunar_rating) VALUES (?, ?, ?, ?, ?, 0, ?);',
+      [catchLog.species, catchLog.weight || null, catchLog.length || null, catchLog.location_name, catchLog.timestamp, solunarRating]
     );
     console.log('💾 Native Cache Queued:', catchLog.species);
   } catch (error) {
