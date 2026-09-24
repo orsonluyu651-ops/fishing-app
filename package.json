@@ -23,6 +23,7 @@
     "expo": "^57.0.24",
     "expo-background-fetch": "~57.0.19",
     "expo-build-properties": "^57.0.21",
+    "expo-camera": "~57.0.5",
     "expo-constants": "~57.0.19",
     "expo-dev-client": "~57.0.19",
     "expo-device": "~57.0.2",
@@ -46,6 +47,7 @@
     "react-native-maps": "1.27.2",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
+    "react-native-share": "^12.3.1",
     "react-native-video-helper": "^1.5.0",
     "react-native-web": "^0.21.2"
   },

@@ -43,12 +43,16 @@ module.exports = {
       // AOT bytecode, smaller heap, faster cold start on iOS.
       jsEngine: 'hermes',
       infoPlist: {
-        NSLocationWhenInUseUsageDescription:
+                NSLocationWhenInUseUsageDescription:
           'Fishlore requires background and local geographic metrics to map exact catch strike coordinates, log ambient lunar trends, and sync telemetry arrays while offline.',
+                NSCameraUsageDescription:
+          'Fishlore requires camera array interactions to capture telemetry logs, catalog species data snapshots, and store high-resolution catch records inside the local device vault.',
         NSPhotoLibraryUsageDescription:
           'Fishlore requires local storage media access to append structural catch log visuals, retrieve existing fish snapshots, and optimize offline memory tile caches.',
-        NSCameraUsageDescription:
-          'Fishlore requires camera array interactions to capture telemetry logs, catalog species data snapshots, and store high-resolution catch records inside the local device vault.',
+        NSPhotoLibraryAddUsageDescription:
+          'Fishlore needs to save your catch photos and videos to your photo library after capture and compression.',
+        NSMicrophoneUsageDescription:
+          'Fishlore requires microphone access to capture ambient audio during video catch log recordings.',
         ITSAppUsesNonExemptEncryption: false,
         // Background fetch — required for the native (dev-client / EAS) builds
         // so the BACKGROUND_CATCH_SYNC_TASK wakeup fires while the app is
@@ -65,13 +69,15 @@ module.exports = {
       // Hermes per-platform enforcement (mirrors top-level jsEngine):
       // AOT bytecode, smaller heap, faster cold start on Android.
       jsEngine: 'hermes',
-      permissions: [
+            permissions: [
         'ACCESS_COARSE_LOCATION',
         'ACCESS_FINE_LOCATION',
         'CAMERA',
         'READ_EXTERNAL_STORAGE',
         'WRITE_EXTERNAL_STORAGE',
         'READ_MEDIA_IMAGES',
+        'READ_MEDIA_VIDEO',
+        'RECORD_AUDIO',
       ],
       adaptiveIcon: {
         foregroundImage: './assets/adaptive-icon-safe.png',
@@ -91,6 +97,14 @@ module.exports = {
       plugins: [
       'expo-router',
       'expo-image-picker',
+      [
+        'expo-camera',
+        {
+          cameraPermission: 'Fishlore requires camera access to capture real-time catch photos and videos.',
+          microphonePermission: 'Fishlore needs microphone access to record audio while filming your catch.',
+          lensCover: false,
+        },
+      ],
       ['@stripe/stripe-react-native', {
         merchantIdentifier: 'merchant.com.fishlore.app',
         bundleIdentifier: 'com.fishlore.app',
@@ -116,9 +130,10 @@ module.exports = {
       ],
       // Notification engine: default Android channel + icon/color and sound
       // wiring for remote push on both platforms.
-      'expo-notifications',
+            'expo-notifications',
       'expo-updates',
       'expo-sqlite',
+      'react-native-share',
     ],
     extra: {
       router: {},

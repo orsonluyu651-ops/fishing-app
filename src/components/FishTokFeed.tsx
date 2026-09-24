@@ -14,8 +14,10 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { compressFeedVideo } from '../lib/videoCompressionPipeline';
+import CatchCameraView, { CaughtMedia } from './CatchCameraView';
+import { shareVideoItemCatch } from '../lib/catchShareExport';
 
-interface VideoItem {
+export interface VideoItem {
   id: string;
   title: string;
   waterCondition: string;
@@ -81,10 +83,12 @@ const CommentSheet: React.FC<CommentSheetProps> = ({ visible, video, onClose, on
 export const FishTokFeed: React.FC = () => {
   const [viewableId, setViewableId] = useState<string | null>('1');
   const [commentTarget, setCommentTarget] = useState<string | null>(null);
-    const [uploadVisible, setUploadVisible] = useState(false);
+      const [uploadVisible, setUploadVisible] = useState(false);
+  const [cameraVisible, setCameraVisible] = useState(false);
   const [uploadTitle, setUploadTitle] = useState('');
   const [speciesTags, setSpeciesTags] = useState('');
   const [selectedAsset, setSelectedAsset] = useState<string | null>(null);
+  const [photoForLog, setPhotoForLog] = useState<string | null>(null);
 
     const [videos, setVideos] = useState<VideoItem[]>([
     {
@@ -197,7 +201,26 @@ export const FishTokFeed: React.FC = () => {
     setUploadTitle('');
     setSpeciesTags('');
     setSelectedAsset(null);
-    setUploadVisible(false);
+        setUploadVisible(false);
+  };
+
+  /** Handle media captured from CatchCameraView. */
+  const handleCapture = (media: CaughtMedia): void => {
+    console.log('[Catch Camera] Capture received in FishTokFeed:', media.mode, media.uri);
+    setCameraVisible(false);
+
+    if (media.mode === 'video') {
+      // Videos are already compressed in the pipeline — just prepend to feed
+      setSelectedAsset(media.uri);
+      setUploadVisible(true);
+    } else if (media.mode === 'photo') {
+      // Photos go straight to catch log form data state
+      setPhotoForLog(media.uri);
+      Alert.alert(
+        'Catch Log',
+        'Photo captured. Add it to the catch log form below.',
+      );
+    }
   };
 
   return (
@@ -259,7 +282,17 @@ export const FishTokFeed: React.FC = () => {
                 accessibilityLabel="Open comments"
                 accessibilityHint="Opens the comment sheet for this catch"
               >
-                <Ionicons name="chatbubble-ellipses-outline" size={26} color="#ffffff" />
+                                <Ionicons name="chatbubble-ellipses-outline" size={26} color="#ffffff" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.toolCell}
+                onPress={() => shareVideoItemCatch(item)}
+                accessibilityRole="button"
+                accessibilityLabel="Share catch to other apps"
+                accessibilityHint="Opens the system share sheet with a privacy-safe catch card"
+              >
+                <Ionicons name="share-outline" size={26} color="#10b981" />
+                <Text style={styles.toolCount}>Share</Text>
               </TouchableOpacity>
             </View>
 
@@ -356,7 +389,27 @@ export const FishTokFeed: React.FC = () => {
             <Text style={styles.uploadCancelText}>
               {selectedAsset ? 'Attached ✓' : 'Attach from library'}
             </Text>
+                    </TouchableOpacity>
+
+          {/* Snapchat-style camera capture button */}
+          <TouchableOpacity
+            onPress={() => setCameraVisible(true)}
+            style={[
+              styles.uploadCancel,
+              {
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+              },
+            ]}
+            accessibilityLabel="Record catch with in-app camera"
+            accessibilityRole="button"
+          >
+            <Ionicons name="camera" size={18} color="#10b981" />
+            <Text style={styles.uploadCancelText}>Record with Camera</Text>
           </TouchableOpacity>
+
           <View style={styles.uploadActions}>
             <TouchableOpacity
               onPress={() => setUploadVisible(false)}
@@ -374,6 +427,20 @@ export const FishTokFeed: React.FC = () => {
             </TouchableOpacity>
           </View>
         </View>
+            </Modal>
+
+      {/* In-app Snapchat-style camera */}
+      <Modal
+        visible={cameraVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCameraVisible(false)}
+      >
+        <CatchCameraView
+          visible={cameraVisible}
+          onClose={() => setCameraVisible(false)}
+          onCapture={handleCapture}
+        />
       </Modal>
     </View>
   );
