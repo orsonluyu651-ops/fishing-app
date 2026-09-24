@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import * as SQLite from 'expo-sqlite';
 import { getSolunarRatingForDate } from '../components/SolunarForecaster';
+import { runMigrations } from './databaseMigrations';
 
 interface OfflineCatch {
   id?: number;
@@ -24,32 +25,18 @@ export const initOfflineDatabase = async (): Promise<void> => {
     return;
   }
 
-  try {
+    try {
     nativeDb = await SQLite.openDatabaseAsync('fishlore_offline.db');
-        await nativeDb.execAsync(`
-      PRAGMA journal_mode = WAL;
-            CREATE TABLE IF NOT EXISTS offline_catches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        species TEXT NOT NULL,
-        weight TEXT,
-        length TEXT,
-        location_name TEXT NOT NULL,
-        timestamp INTEGER NOT NULL,
-        synced INTEGER DEFAULT 0,
-        latitude REAL,
-        longitude REAL,
-        solunar_rating TEXT
-      );
-    `);
-    // Idempotent schema guard: add geo columns to databases seeded before the
-    // columns existed. ALTER TABLE IF EXISTS skips the migration on fresh files.
-    await nativeDb.execAsync(`
-      ALTER TABLE offline_catches ADD COLUMN latitude REAL;
-      ALTER TABLE offline_catches ADD COLUMN longitude REAL;
-    `);
+    await nativeDb.execAsync(`PRAGMA journal_mode = WAL;`);
+
+    // ── Centralized schema migration: reads user_version, applies all
+    //    pending steps in order inside an atomic transaction, bumps the
+    //    pragma after each step. Existing data is never dropped. ──
+    await runMigrations(nativeDb, 'fishlore_offline.db');
+
     console.log('💾 Storage Engine: Native expo-sqlite Container Formatted.');
   } catch (error) {
-    console.error('Offline DB Initialization failure:', error);
+    console.error('[Database Migration] Offline DB Initialization failure:', error);
   }
 };
 

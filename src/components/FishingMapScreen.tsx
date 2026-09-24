@@ -13,6 +13,7 @@ import MapView, {
   LongPressEvent,
 } from 'react-native-maps';
 import * as SQLite from 'expo-sqlite';
+import { runMigrations } from '../lib/databaseMigrations';
 import { getSolunarRatingForDate } from '../components/SolunarForecaster';
 
 // ── Gold Coast viewport (Southport Seaway) ──────────────────────────────────
@@ -58,35 +59,19 @@ const useCatchPinsDb = () => {
     // Android/iOS only — react-native-maps codegen doesn't ship for web.
     if (Platform.OS === 'web') return;
     (async () => {
-      try {
+            try {
         const database = await SQLite.openDatabaseAsync(FISHING_DB);
-        // Ensure geo columns exist on legacy databases (idempotent ALTER guard).
-                await database.execAsync(`
-          PRAGMA journal_mode = WAL;
-          CREATE TABLE IF NOT EXISTS offline_catches (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            species     TEXT NOT NULL,
-            weight      TEXT,
-            length      TEXT,
-            location_name TEXT NOT NULL,
-            timestamp   INTEGER NOT NULL,
-            synced      INTEGER DEFAULT 0,
-            latitude    REAL,
-            longitude   REAL,
-            solunar_rating TEXT
-          );
-        `);
-        await database.execAsync(`
-          ALTER TABLE offline_catches ADD COLUMN latitude REAL;
-          ALTER TABLE offline_catches ADD COLUMN longitude REAL;
-          ALTER TABLE offline_catches ADD COLUMN solunar_rating TEXT;
-        `);
+        // ── Centralized schema migration: reads user_version, applies all
+        //    pending steps inside an atomic transaction. Delegated to the
+        //    single source-of-truth migration module. ──
+        await database.execAsync(`PRAGMA journal_mode = WAL;`);
+        await runMigrations(database, 'fishlore_offline.db');
         if (active) {
           setDb(database);
           setReady(true);
         }
       } catch (err) {
-        console.error('[FishingMapScreen] SQLite init failed:', err);
+        console.error('[Database Migration] [FishingMapScreen] SQLite init failed:', err);
       }
     })();
     return () => { active = false; };
