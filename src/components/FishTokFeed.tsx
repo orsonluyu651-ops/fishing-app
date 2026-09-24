@@ -12,15 +12,19 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 
 interface VideoItem {
   id: string;
   title: string;
   waterCondition: string;
   url: string;
-  likes: number;
+  speciesTags: string[];
+  likesCount: number;
+  commentsCount: number;
   isLiked: boolean;
   comments: string[];
+  thumbnailColor: string;
 }
 
 interface CommentSheetProps {
@@ -76,27 +80,35 @@ const CommentSheet: React.FC<CommentSheetProps> = ({ visible, video, onClose, on
 export const FishTokFeed: React.FC = () => {
   const [viewableId, setViewableId] = useState<string | null>('1');
   const [commentTarget, setCommentTarget] = useState<string | null>(null);
-  const [uploadVisible, setUploadVisible] = useState(false);
+    const [uploadVisible, setUploadVisible] = useState(false);
   const [uploadTitle, setUploadTitle] = useState('');
+  const [speciesTags, setSpeciesTags] = useState('');
+  const [selectedAsset, setSelectedAsset] = useState<string | null>(null);
 
-  const [videos, setVideos] = useState<VideoItem[]>([
+    const [videos, setVideos] = useState<VideoItem[]>([
     {
       id: '1',
       title: 'Snapper smash on the shallow reefs!',
       waterCondition: 'Water Temp: 21°C • Tide: Rising',
       url: 'https://mixkit.co',
-      likes: 402,
+      speciesTags: ['Snapper', 'Reef'],
+      likesCount: 402,
+      commentsCount: 2,
       isLiked: false,
       comments: ['What a catch at the Seaway!', 'What rig were you using?'],
+      thumbnailColor: '#1e3a5f',
     },
     {
       id: '2',
       title: 'Topwater Kingfish explosion!',
       waterCondition: 'Water Temp: 19°C • Swell: 1.2m',
       url: 'https://mixkit.co',
-      likes: 819,
+      speciesTags: ['Kingfish', 'Topwater'],
+      likesCount: 819,
+      commentsCount: 1,
       isLiked: true,
       comments: ['Kingfish of a lifetime — legend!'],
+      thumbnailColor: '#1e40af',
     },
   ]);
 
@@ -110,7 +122,9 @@ export const FishTokFeed: React.FC = () => {
   const toggleLike = (id: string) => {
     setVideos((prev) =>
       prev.map((v) =>
-        v.id === id ? { ...v, isLiked: !v.isLiked, likes: v.isLiked ? v.likes - 1 : v.likes + 1 } : v
+        v.id === id
+          ? { ...v, isLiked: !v.isLiked, likesCount: v.isLiked ? v.likesCount - 1 : v.likesCount + 1 }
+          : v
       )
     );
   };
@@ -121,6 +135,26 @@ export const FishTokFeed: React.FC = () => {
     );
   };
 
+    /* Request library permission then launch the gallery picker for video selection. */
+  const launchMediaPicker = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(
+        'Permission needed',
+        'We need access to your photo library so you can attach a catch video.',
+      );
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['videos'],
+      allowsEditing: true,
+      quality: 1,
+    });
+    if (!result.canceled && result.assets.length > 0) {
+      setSelectedAsset(result.assets[0].uri);
+    }
+  };
+
   const handleUpload = () => {
     const t = uploadTitle.trim();
     if (t.length === 0) {
@@ -128,16 +162,26 @@ export const FishTokFeed: React.FC = () => {
       return;
     }
     const newCard: VideoItem = {
-      id: `vid-${Date.now()}`,
+      id: Date.now().toString(),
       title: t,
       waterCondition: 'Water Temp: ?? • Tide: ??',
-      url: 'https://mixkit.co',
-      likes: 0,
+      url: selectedAsset ?? 'https://mixkit.co',
+      speciesTags: speciesTags
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      likesCount: 0,
+      commentsCount: 0,
       isLiked: false,
       comments: [],
+      thumbnailColor: ['#0284c7', '#0d9488', '#10b981', '#0d9488', '#0284c7'][
+        Math.floor(Math.random() * 5)
+      ],
     };
     setVideos((prev) => [newCard, ...prev]);
     setUploadTitle('');
+    setSpeciesTags('');
+    setSelectedAsset(null);
     setUploadVisible(false);
   };
 
@@ -191,7 +235,7 @@ export const FishTokFeed: React.FC = () => {
                   size={28}
                   color="#ef4444"
                 />
-                <Text style={styles.toolCount}>{item.likes}</Text>
+                <Text style={styles.toolCount}>{item.likesCount}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.toolCell}
@@ -224,6 +268,13 @@ export const FishTokFeed: React.FC = () => {
 
             <View style={styles.overlay}>
               <Text style={styles.title}>{item.title}</Text>
+              <View style={styles.tagRow}>
+                {item.speciesTags.map((tag) => (
+                  <View key={tag} style={styles.speciesTag}>
+                    <Text style={styles.speciesTagText}>#{tag}</Text>
+                  </View>
+                ))}
+              </View>
               <Text style={styles.meta}>{item.waterCondition}</Text>
             </View>
           </View>
@@ -256,7 +307,7 @@ export const FishTokFeed: React.FC = () => {
         />
         <View style={styles.uploadSheet}>
           <Text style={styles.uploadTitle}>Post a new catch video</Text>
-          <TextInput
+                    <TextInput
             placeholder="Video title"
             value={uploadTitle}
             onChangeText={setUploadTitle}
@@ -264,6 +315,33 @@ export const FishTokFeed: React.FC = () => {
             placeholderTextColor="#94a3b8"
             onSubmitEditing={handleUpload}
           />
+          <TextInput
+            placeholder="Species tags (comma-separated)"
+            value={speciesTags}
+            onChangeText={setSpeciesTags}
+            style={styles.uploadInput}
+            placeholderTextColor="#94a3b8"
+            onSubmitEditing={handleUpload}
+          />
+          <TouchableOpacity
+            onPress={launchMediaPicker}
+            style={[
+              styles.uploadCancel,
+              {
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+              },
+            ]}
+            accessibilityLabel="Attach catch video from library"
+            accessibilityRole="button"
+          >
+            <Ionicons name="videocam" size={18} color="#0284c7" />
+            <Text style={styles.uploadCancelText}>
+              {selectedAsset ? 'Attached ✓' : 'Attach from library'}
+            </Text>
+          </TouchableOpacity>
           <View style={styles.uploadActions}>
             <TouchableOpacity
               onPress={() => setUploadVisible(false)}
@@ -301,7 +379,10 @@ const styles = StyleSheet.create({
   accentGlowBottom: { position: 'absolute', bottom: -80, left: -60, width: 250, height: 250, borderRadius: 125, backgroundColor: 'rgba(2, 132, 199, 0.20)' },
   videoPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   playIcon: { color: '#0284c7', fontSize: 18, fontWeight: 'bold' },
-  overlay: { position: 'absolute', bottom: 100, left: 20, right: 20 },
+    overlay: { position: 'absolute', bottom: 100, left: 20, right: 20 },
+  tagRow: { flexDirection: 'row', gap: 4, marginBottom: 4 },
+  speciesTag: { backgroundColor: 'rgba(2, 132, 199, 0.2)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
+  speciesTagText: { color: '#0284c7', fontSize: 11, fontWeight: '600' },
   title: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginBottom: 8 },
   meta: { color: '#38bdf8', fontSize: 14, fontWeight: '600' },
   rightToolbar: {
