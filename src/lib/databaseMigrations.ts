@@ -93,7 +93,7 @@ const fishloreMigrations: DbMigrationPlan = {
         `CREATE INDEX IF NOT EXISTS idx_video_metadata_catch_id ON video_metadata(catch_id);`,
       ],
     },
-    {
+        {
       version: 6,
       description: 'Create solunar_calendar_cache table for 30-day offline forecasts',
       sql: [`
@@ -113,6 +113,26 @@ const fishloreMigrations: DbMigrationPlan = {
         );
         CREATE INDEX IF NOT EXISTS idx_calendar_coords ON solunar_calendar_cache(latitude, longitude);
         CREATE INDEX IF NOT EXISTS idx_calendar_date ON solunar_calendar_cache(date_unix);
+      `],
+    },
+    {
+      version: 7,
+      description: 'Create sync_outbox table for offline-first mutation queue',
+      sql: [`
+        CREATE TABLE IF NOT EXISTS sync_outbox (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          table_name TEXT NOT NULL,
+          record_id TEXT NOT NULL,
+          action TEXT NOT NULL CHECK(action IN ('INSERT', 'UPDATE', 'DELETE')),
+          payload TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'PENDING',
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          error_message TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sync_status ON sync_outbox(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_sync_created ON sync_outbox(created_at);
       `],
     },
     ],

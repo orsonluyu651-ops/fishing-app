@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import * as SQLite from 'expo-sqlite';
 import { getSolunarRatingForDate } from '../components/SolunarForecaster';
 import { runMigrations } from './databaseMigrations';
+import { queueMutation } from './syncEngine';
 
 interface OfflineCatch {
   id?: number;
@@ -88,6 +89,11 @@ export const queueOfflineCatch = async (catchLog: Omit<OfflineCatch, 'id' | 'syn
     const webCache = JSON.stringify([...JSON.parse(localStorage.getItem('fishlore_web_catches') || '[]'), { ...catchLog, id: Date.now(), synced: 0, solunar_rating: solunarRating }]);
     localStorage.setItem('fishlore_web_catches', webCache);
     console.log('📦 Web Cache Synced:', catchLog.species);
+    // Queue the mutation for web sync reconciliation
+    await queueMutation('offline_catches', Date.now().toString(), 'INSERT', {
+      ...catchLog,
+      solunar_rating: solunarRating,
+    });
     return;
   }
 
@@ -98,6 +104,17 @@ export const queueOfflineCatch = async (catchLog: Omit<OfflineCatch, 'id' | 'syn
       [catchLog.species, catchLog.weight || null, catchLog.length || null, catchLog.location_name, catchLog.timestamp, solunarRating]
     );
     console.log('💾 Native Cache Queued:', catchLog.species);
+
+    // ── Queue the mutation into the outbox for background sync ──
+    const payload = {
+      species: catchLog.species,
+      weight: catchLog.weight || null,
+      length: catchLog.length || null,
+      location_name: catchLog.location_name,
+      timestamp: catchLog.timestamp,
+      solunar_rating: solunarRating,
+    };
+    await queueMutation('offline_catches', catchLog.timestamp.toString(), 'INSERT', payload);
   } catch (error) {
     console.error('Failed to cache record:', error);
   }
