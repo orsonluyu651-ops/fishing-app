@@ -12,7 +12,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { GeoPoint } from '@/lib/mapClusterEngine';
 
-interface Hotspot {
+export interface Hotspot {
   id: string;
   name: string;
   latitude: number;
@@ -21,12 +21,18 @@ interface Hotspot {
 }
 
 const HOTSPOTS: Hotspot[] = [
-  { id: '1', name: 'Southport Seaway', latitude: -27.9372, longitude: 153.4312, fish: 'Jewfish & Flathead' },
-  { id: '2', name: 'Broadwater Banks', latitude: -27.9158, longitude: 153.4091, fish: 'Whiting & Bream' },
-  { id: '3', name: 'Jumpinpin Channel', latitude: -27.7214, longitude: 153.4445, fish: 'Big Flathead' },
+  { id: '1', name: 'Southport Seaway', latitude: -27.937, longitude: 153.431, fish: 'Jewfish & Flathead' },
+  { id: '2', name: 'Broadwater Banks', latitude: -27.915, longitude: 153.415, fish: 'Whiting & Bream' },
+  { id: '3', name: 'Jumpinpin Channel', latitude: -27.718, longitude: 153.444, fish: 'Big Flathead' },
 ];
 
-export default function FishloreMap() {
+export { HOTSPOTS };
+
+export interface FishloreMapProps {
+  onHotspotChange?: (spot: Hotspot) => void;
+}
+
+export default function FishloreMap({ onHotspotChange }: FishloreMapProps = {}) {
   const [activeSpot, setActiveSpot] = useState<Hotspot>(HOTSPOTS[0]);
 
   return (
@@ -47,7 +53,7 @@ export default function FishloreMap() {
         {HOTSPOTS.map((spot) => (
           <TouchableOpacity
             key={spot.id}
-            onPress={() => setActiveSpot(spot)}
+            onPress={() => { setActiveSpot(spot); onHotspotChange?.(spot); }}
             style={[styles.btn, activeSpot.id === spot.id && styles.activeBtn]}
           >
             <Text style={[styles.btnText, activeSpot.id === spot.id && styles.activeBtnText]}>

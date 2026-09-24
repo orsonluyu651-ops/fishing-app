@@ -1,5 +1,28 @@
-import RNFS from 'react-native-fs';
-import VideoHelper from 'react-native-video-helper';
+import { Platform } from 'react-native';
+
+/** Lazily resolves react-native-fs only on native; returns null on web. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const getRNFS = (): any | null => {
+  if (Platform.OS === 'web') return null;
+  try {
+    return require('react-native-fs');
+  } catch (e) {
+    console.warn('[Media Pipeline] react-native-fs unavailable:', e);
+    return null;
+  }
+};
+
+/** react-native-video-helper is native-only; lazy-load on demand. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const getVideoHelper = (): any | null => {
+  if (Platform.OS === 'web') return null;
+  try {
+    return require('react-native-video-helper');
+  } catch (e) {
+    console.warn('[Media Pipeline] react-native-video-helper unavailable:', e);
+    return null;
+  }
+};
 
 /**
  * Quality presets that map to react-native-video-helper's `quality` option.
@@ -46,8 +69,27 @@ export async function compressFeedVideo(
 ): Promise<CompressedVideoResult> {
   const { quality = 'medium', startTime = 0, endTime } = options;
 
-  // ── Stat the source file ─────────────────────────────────────────────────
-  let sourceStat: RNFS.StatResult;
+  // ── Web fallback: native FS + encoder unavailable, return a mock passthrough ─
+  if (Platform.OS === 'web') {
+    console.log('[Media Pipeline] Web platform — skipping native video compression.');
+    return {
+      uri: sourceUri,
+      sizeInBytes: 0,
+      duration: endTime && startTime ? endTime - startTime : 0,
+      compressionRatio: '0.0%',
+    };
+  }
+
+  const RNFS = getRNFS();
+  if (!RNFS) {
+    throw new Error(
+      'compressFeedVideo: react-native-fs is not available on this platform',
+    );
+  }
+
+      // ── Stat the source file ─────────────────────────────────────────────────
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let sourceStat: any;
   try {
     sourceStat = await RNFS.stat(sourceUri);
   } catch (statError) {
@@ -107,6 +149,13 @@ export async function compressFeedVideo(
       `[Media Pipeline] Compressing video to: ${outputDir} (quality: ${quality})`,
     );
 
+        const VideoHelper = getVideoHelper();
+    if (!VideoHelper) {
+      throw new Error(
+        'compressFeedVideo: react-native-video-helper is not available on this platform',
+      );
+    }
+
     const compressedUri: string = await VideoHelper.compress(sourceUri, {
       startTime,
       endTime,
@@ -119,7 +168,7 @@ export async function compressFeedVideo(
     const destFile = `${outputDir}/${filename}`;
 
     if (compressedUri !== destFile) {
-      await RNFS.copyFile(compressedUri, destFile).catch((copyErr) => {
+            await RNFS.copyFile(compressedUri, destFile).catch((copyErr: any) => {
         console.error('[Media Pipeline] Copy to cache failed:', copyErr);
         throw copyErr;
       });

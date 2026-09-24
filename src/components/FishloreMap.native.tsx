@@ -49,7 +49,7 @@ import {
 // summary — the map's interactivity is never interrupted by a bad tile.
 // ════════════════════════════════════════════════════════════
 
-interface Hotspot {
+export interface Hotspot {
   id: string;
   name: string;
   latitude: number;
@@ -58,10 +58,16 @@ interface Hotspot {
 }
 
 const HOTSPOTS: Hotspot[] = [
-  { id: '1', name: 'Southport Seaway', latitude: -27.9372, longitude: 153.4312, fish: 'Jewfish & Flathead' },
-  { id: '2', name: 'Broadwater Banks', latitude: -27.9158, longitude: 153.4091, fish: 'Whiting & Bream' },
-  { id: '3', name: 'Jumpinpin Channel', latitude: -27.7214, longitude: 153.4445, fish: 'Big Flathead' },
+  { id: '1', name: 'Southport Seaway', latitude: -27.937, longitude: 153.431, fish: 'Jewfish & Flathead' },
+  { id: '2', name: 'Broadwater Banks', latitude: -27.915, longitude: 153.415, fish: 'Whiting & Bream' },
+  { id: '3', name: 'Jumpinpin Channel', latitude: -27.718, longitude: 153.444, fish: 'Big Flathead' },
 ];
+
+export { HOTSPOTS };
+
+export interface FishloreMapProps {
+  onHotspotChange?: (spot: Hotspot) => void;
+}
 
 const GOLD_COAST_REGION = {
   latitude: -27.935,
@@ -106,7 +112,7 @@ interface CacheProgress {
   total: number;
 }
 
-export default function FishloreMap() {
+export default function FishloreMap({ onHotspotChange }: FishloreMapProps = {}) {
   const mapRef = useRef<MapView | null>(null);
   const [isOnline, setIsOnline] = useState(true);
   const [activeSpot, setActiveSpot] = useState<Hotspot>(HOTSPOTS[0]);
@@ -403,6 +409,7 @@ export default function FishloreMap() {
             key={spot.id}
             onPress={() => {
               setActiveSpot(spot);
+              onHotspotChange?.(spot);
               mapRef.current?.animateToRegion(
                 {
                   latitude: spot.latitude,

@@ -1,5 +1,28 @@
 import { Alert, Platform } from 'react-native';
-import Share from 'react-native-share';
+
+// Platform-gated module reference so react-native-share's native binary
+// (and its TurboModuleRegistry lookup) is NEVER eagerly imported on web.
+// On web this stays `undefined` until the first native-platform call path.
+let NativeShare: typeof import('react-native-share')['default'] | undefined;
+
+/** Lazily resolves the native Share module, guarded for web/non-native. */
+function getNativeShare() {
+  if (typeof NativeShare !== 'undefined') {
+    return NativeShare;
+  }
+  if (Platform.OS === 'web') {
+    return undefined;
+  }
+  try {
+    // Dynamic require keeps react-native-share out of the web module graph.
+    const ShareModule = require('react-native-share');
+    NativeShare = ShareModule && ShareModule.default ? ShareModule.default : ShareModule;
+    return NativeShare;
+  } catch (e) {
+    console.warn('[Share Utility] Native share module unavailable:', e);
+    return undefined;
+  }
+}
 
 interface ShareCatchPayload {
   title: string;
@@ -23,6 +46,12 @@ export const shareCatchLog = async (payload: ShareCatchPayload): Promise<void> =
   }
 
   try {
+    const NativeShare = getNativeShare();
+    if (!NativeShare) {
+      console.warn('[Share Utility] Native share unavailable — falling back to alert.');
+      Alert.alert('Sharing Unavailable', 'Could not open the system share sheet on this device.');
+      return;
+    }
     const shareOptions: any = {
       message: shareMessage,
       title: 'Fishlore App Catch Share',
@@ -42,9 +71,9 @@ export const shareCatchLog = async (payload: ShareCatchPayload): Promise<void> =
       console.log('[Share Utility] Text-only share (no media asset).');
     }
 
-    const result = await Share.open(shareOptions);
+    const result = await NativeShare.open(shareOptions);
 
-        if (result) {
+    if (result) {
       console.log('[Share Utility] Share completed with message:', result.message);
     } else {
       console.log('[Share Utility] Share returned no result.');
