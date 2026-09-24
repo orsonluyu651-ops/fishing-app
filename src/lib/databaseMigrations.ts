@@ -83,7 +83,7 @@ const fishloreMigrations: DbMigrationPlan = {
         );
       `],
     },
-    {
+        {
       version: 5,
       description: 'Add video_index column to offline_catches + performance indexes',
       sql: [
@@ -92,6 +92,28 @@ const fishloreMigrations: DbMigrationPlan = {
         `CREATE INDEX IF NOT EXISTS idx_offline_catches_synced ON offline_catches(synced);`,
         `CREATE INDEX IF NOT EXISTS idx_video_metadata_catch_id ON video_metadata(catch_id);`,
       ],
+    },
+    {
+      version: 6,
+      description: 'Create solunar_calendar_cache table for 30-day offline forecasts',
+      sql: [`
+        CREATE TABLE IF NOT EXISTS solunar_calendar_cache (
+          iso_date TEXT PRIMARY KEY,
+          date_unix INTEGER NOT NULL,
+          moon_phase REAL NOT NULL,
+          activity_index INTEGER NOT NULL,
+          rating TEXT NOT NULL,
+          moon_icon TEXT NOT NULL,
+          major_count INTEGER NOT NULL,
+          minor_count INTEGER NOT NULL,
+          peak_time TEXT,
+          latitude REAL NOT NULL,
+          longitude REAL NOT NULL,
+          generated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_calendar_coords ON solunar_calendar_cache(latitude, longitude);
+        CREATE INDEX IF NOT EXISTS idx_calendar_date ON solunar_calendar_cache(date_unix);
+      `],
     },
     ],
 };
