@@ -182,30 +182,122 @@ export function AnglerCopilotCard({
 
   // ── Suburb search ────────────────────────────────────────────────────────
   const [suburbQuery, setSuburbQuery] = useState<string>('');
+  const [suburbMeta, setSuburbMeta] = useState<{
+    waterBody: string;
+    targetSpecies: string[];
+    description: string;
+  } | null>(null);
 
-  /** Hardcoded suburb-to-coordinate lookup for Gold Coast area hotspots. */
-  const SUBURB_COORDS: Record<string, { latitude: number; longitude: number }> = {
-        oxenford: { latitude: -27.421, longitude: 153.411 },       // Oxenford → Coomera River
-    paradise: { latitude: -27.9116, longitude: 153.4216 },  // Paradise Point → Lions Park / Pier
+  /**
+   * Comprehensive Gold Coast suburb-to-coordinate registry.
+   * Each entry includes the local water body characteristics so the
+   * AI tactics prompt can deliver highly specific, region-aware advice.
+   */
+  const SUBURB_COORDS: Record<string, {
+    latitude: number;
+    longitude: number;
+    waterBody: string;
+    targetSpecies: string[];
+    description: string;
+  }> = {
+    oxenford: {
+      latitude: -27.4210,
+      longitude: 153.4110,
+      waterBody: 'Coomera River Brackish',
+      targetSpecies: ['Mangrove Jack', 'Mud Crab'],
+      description: 'Brackish snag lines — soft plastics over structure',
+    },
+    paradise: {
+      latitude: -27.9116,
+      longitude: 153.4216,
+      waterBody: 'Broadwater Flats',
+      targetSpecies: ['Flathead', 'Whiting'],
+      description: 'Shallow sandy flats — light line, poppers, nippers',
+    },
+    hope: {
+      latitude: -27.9212,
+      longitude: 153.4212,
+      waterBody: 'Coomera River Channels',
+      targetSpecies: ['Jewfish', 'Trevally'],
+      description: 'Deep channels — paternoster rigs, live bait',
+    },
+    runaway: {
+      latitude: -27.9300,
+      longitude: 153.4190,
+      waterBody: 'Canal Systems',
+      targetSpecies: ['Bream', 'Pontoons'],
+      description: 'Urban canal pontoons — soft plastics, bread bait',
+    },
+    mainbeach: {
+      latitude: -27.9420,
+      longitude: 153.4320,
+      waterBody: 'The Spit Ocean Jetty',
+      targetSpecies: ['Tailor', 'Salmon'],
+      description: 'Ocean surf — ganged hooks, beach worms, metal slugs',
+    },
+    surfers: {
+      latitude: -27.9980,
+      longitude: 153.4220,
+      waterBody: 'Nerang River Loops',
+      targetSpecies: ['Flathead', 'Bream'],
+      description: 'Winding river loops — soft plastics, vibration blades',
+    },
+    burleigh: {
+      latitude: -28.0920,
+      longitude: 153.4560,
+      waterBody: 'Tallebudgera Creek Mouth',
+      targetSpecies: ['Whiting', 'Flathead'],
+      description: 'Creek mouth sand Spits — fresh yabbies, light fluorocarbon',
+    },
+    currumbin: {
+      latitude: -28.1310,
+      longitude: 153.4810,
+      waterBody: 'Currumbin Creek Estuary',
+      targetSpecies: ['Sand Flat Whiting', 'Bream'],
+      description: 'Protected estuary sand flats — long shank hooks, worms',
+    },
+    jacobs: {
+      latitude: -27.7810,
+      longitude: 153.3610,
+      waterBody: 'Southern Bay Mangroves',
+      targetSpecies: ['Mud Crab', 'Whiting'],
+      description: 'Mangrove-lined shoreline — crab pots, live mudeyes',
+    },
   };
 
   /**
-   * Resolve a suburb search query to coordinates.
+   * Resolve a suburb search query to coordinates + local water characteristics.
    * Returns null if no match — the caller falls back to a custom label.
    */
-  const resolveSuburbCoords = (query: string): { latitude: number; longitude: number } | null => {
+  const resolveSuburbCoords = (
+    query: string,
+  ): {
+    latitude: number;
+    longitude: number;
+    waterBody: string;
+    targetSpecies: string[];
+    description: string;
+  } | null => {
     const key = query.toLowerCase().trim();
     if (SUBURB_COORDS[key]) {
-      console.log('[Copilot Layout Complete] Suburb resolved:', key, SUBURB_COORDS[key]);
+      console.log(
+        '[Copilot Refinement Complete] Suburb resolved:',
+        key,
+        SUBURB_COORDS[key],
+      );
       return SUBURB_COORDS[key];
     }
-    console.log('[Copilot Layout Complete] No coordinate match for suburb:', query);
-        return null;
+    console.log(
+      '[Copilot Refinement Complete] No coordinate match for suburb:',
+      query,
+    );
+    return null;
   };
 
   // ── Suburb-resolved coordinates override ─────────────────────────────────
   const [suburbCoords, setSuburbCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [suburbLabel, setSuburbLabel] = useState<string | null>(null);
+
 
   // ── Conversational chat ─────────────────────────────────────────────────
   interface ChatMessage {
@@ -264,20 +356,26 @@ export function AnglerCopilotCard({
    * Handle suburb search submission.
    * Resolves known suburbs to coordinates or falls back to a label override.
    */
-  const handleSuburbSubmit = (): void => {
+    const handleSuburbSubmit = (): void => {
     const trimmed = suburbQuery.trim();
     if (!trimmed) return;
 
     const coords = resolveSuburbCoords(trimmed);
     if (coords) {
-      setSuburbCoords(coords);
+      setSuburbCoords({ latitude: coords.latitude, longitude: coords.longitude });
+      setSuburbMeta({
+        waterBody: coords.waterBody,
+        targetSpecies: coords.targetSpecies,
+        description: coords.description,
+      });
       setSuburbLabel(null);
-      console.log('[Copilot Layout Complete] Suburb search resolved to coords:', coords);
+      console.log('[Copilot Refinement Complete] Suburb search resolved to coords:', coords);
     } else {
       // No coordinate match — use as a custom header override label
       setSuburbCoords(null);
+      setSuburbMeta(null);
       setSuburbLabel(trimmed);
-      console.log('[Copilot Layout Complete] Using custom suburb label:', trimmed);
+      console.log('[Copilot Refinement Complete] Using custom suburb label:', trimmed);
     }
   };
 
@@ -301,8 +399,14 @@ export function AnglerCopilotCard({
   ): Promise<void> => {
     const prompt = buildAIPrompt(telemetryPayload);
     const breakdown = simulateAITacticsResponse(telemetryPayload, prompt);
+
+    // Build local specificity context from suburb metadata
+    const localContext = suburbMeta
+      ? `\n\n**${suburbMeta.waterBody}** — ${suburbMeta.description}\nTarget species: ${suburbMeta.targetSpecies.join(', ')}`
+      : '';
+
     const simulatedText =
-      `Based on your question: "${question}"\n\n` +
+      `Based on your question: "${question}"${localContext}\n\n` +
       `With a bite probability of ${telemetryPayload.biteProbabilityScore.score}/100 ` +
       `(${telemetryPayload.biteProbabilityScore.grade}) and ${telemetryPayload.tide.direction} tide:\n\n` +
       `**Recommended Lure:** ${breakdown.recommendedLures.join(', ')}\n` +
@@ -1032,23 +1136,24 @@ const styles = StyleSheet.create({
   },
   chatBubbleUser: {
     alignSelf: 'flex-end',
-    backgroundColor: '#0284c7',
-    color: '#f1f5f9',
+    backgroundColor: '#0284c7', // Vibrant blue
+    color: '#ffffff',
     borderBottomRightRadius: 6,
   },
   chatBubbleAssistant: {
     alignSelf: 'flex-start',
-    backgroundColor: '#1e293b',
-    color: '#cbd5e1',
+    backgroundColor: '#334155', // Lighter slate gray for contrast
+    color: '#ffffff',
     borderBottomLeftRadius: 6,
   },
   chatBubbleText: {
     fontSize: 13,
     lineHeight: 18,
+    color: '#ffffff', // Ultra-readable white text on both bubbles
   },
   chatPlaceholder: {
     fontSize: 12,
-    color: '#64748b',
+    color: '#94a3b8',
     textAlign: 'center',
     paddingVertical: 16,
     paddingHorizontal: 12,
@@ -1062,14 +1167,14 @@ const styles = StyleSheet.create({
   },
   chatInput: {
     flex: 1,
-    backgroundColor: '#0f172a',
+    backgroundColor: '#0f172a', // Deep slate background
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 8,
     fontSize: 14,
-    color: '#e2e8f0',
+    color: '#f1f5f9', // High-contrast off-white text
     borderWidth: 1,
-    borderColor: '#1e293b',
+    borderColor: '#38bdf8', // Cyan border for vivid contrast
     minHeight: 40,
     maxHeight: 80,
     textAlignVertical: 'center',
